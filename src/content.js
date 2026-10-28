@@ -34,7 +34,14 @@
   window.addEventListener('message', (event) => {
     if (event.source !== window || event.origin !== location.origin) return;
     const data = event.data;
-    if (!data || data.__xmonitor !== true || data.kind !== 'graphql') return;
+    if (!data || data.__xmonitor !== true) return;
+
+    if (data.kind === 'followers-page') {
+      bufferPage(data);
+      return;
+    }
+
+    if (data.kind !== 'graphql') return;
     send({
       type: 'CAPTURE',
       op: data.op || '',
@@ -43,6 +50,180 @@
       payload: data.payload ?? null,
     });
   });
+
+  // ------------------------------------------------------------- follower list
+
+  // A capture always gets a fresh document. Buffer its first response, which
+  // can arrive before the worker's start message, but never mix different lists.
+  const pages = new Map();
+  const MAX_BUFFERED = 30_000;
+  const MAX_PAGES = 400;
+  let run = null;
+  let overflow = false;
+  let buffered = 0;
+
+  function onFollowersPage(handle) {
+    const match = location.pathname.match(/^\/([A-Za-z0-9_]{1,15})\/followers\/?$/i);
+    return Boolean(match && (!handle || match[1].toLowerCase() === handle.toLowerCase()));
+  }
+
+  function bufferPage(page) {
+    if (!onFollowersPage() || !page || !Array.isArray(page.people)) return;
+    if (page.owner && !onFollowersPage(page.owner)) return;
+    const cursor = String(page.requestCursor || '');
+    if (pages.has(cursor)) return;
+    if (pages.size >= MAX_PAGES || buffered + page.people.length > MAX_BUFFERED) {
+      overflow = true;
+      return;
+    }
+    buffered += page.people.length;
+    pages.set(cursor, page);
+  }
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /** A small nudge retriggers loading when the last scroll hit a busy loader. */
+  async function scrollToBottom() {
+    const column = document.querySelector('[data-testid="primaryColumn"]');
+    const scroller = column && column.scrollHeight > column.clientHeight ? column : null;
+    if (scroller) scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight - 160);
+    window.scrollTo(0, Math.max(0, document.documentElement.scrollHeight - window.innerHeight - 160));
+    await sleep(50);
+    if (scroller) {
+      scroller.scrollTop = scroller.scrollHeight;
+      // Chrome can defer native scroll events in an inactive tab. Notify the
+      // page's loader as well, without fetching or clicking anything ourselves.
+      scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+    }
+    window.scrollTo(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));
+    window.dispatchEvent(new Event('scroll'));
+  }
+
+  /** Only pages linked all the way from the first cursor belong to this run. */
+  function readList(handle, accountId) {
+    const people = new Map();
+    const visited = new Set();
+    let cursor = '';
+    let reachedEnd = false;
+    let expected = null;
+    let valid = !overflow;
+
+    while (pages.has(cursor) && !visited.has(cursor)) {
+      visited.add(cursor);
+      const page = pages.get(cursor);
+      const ownerMatches = page.owner
+        ? page.owner.toLowerCase() === handle.toLowerCase()
+        : Boolean(accountId && page.ownerId === accountId);
+      if (!ownerMatches || (accountId && page.ownerId && page.ownerId !== accountId)) valid = false;
+      if (page.valid !== true) valid = false;
+      if (Number.isSafeInteger(page.expected) && page.expected >= 0) {
+        if (expected !== null && expected !== page.expected) valid = false;
+        expected = page.expected;
+      }
+      for (const person of page.people) {
+        if (!person?.id) {
+          valid = false;
+          continue;
+        }
+        people.set(String(person.id), person);
+        if (people.size > MAX_BUFFERED) {
+          return { entries: [], reachedEnd: false, tooLarge: true, pages: visited.size, expected };
+        }
+      }
+      if (page.reachedEnd) {
+        reachedEnd = true;
+        break;
+      }
+      if (!page.bottomCursor || page.bottomCursor === cursor) break;
+      cursor = page.bottomCursor;
+    }
+    return {
+      entries: [...people.values()],
+      reachedEnd: valid && reachedEnd,
+      tooLarge: overflow,
+      pages: visited.size,
+      expected,
+    };
+  }
+
+  /**
+   * Walk the whole follower list. Resolves once X stops serving new people, and
+   * says whether it actually reached the end, because a capture that stopped
+   * early must never be compared with the previous one.
+   */
+  async function collectFollowers(current) {
+    const deadline = Date.now() + 45_000;
+    let idle = 0;
+    let lastSize = -1;
+    let lastProgress = 0;
+    let list = readList(current.handle, current.accountId);
+
+    while (Date.now() < deadline) {
+      if (!onFollowersPage(current.handle)) break;
+      if (list.reachedEnd || list.tooLarge) break;
+      await scrollToBottom();
+      await sleep(650);
+      list = readList(current.handle, current.accountId);
+      idle = list.entries.length === lastSize ? idle + 1 : 0;
+      lastSize = list.entries.length;
+      if (Date.now() - lastProgress >= 2000) {
+        lastProgress = Date.now();
+        // Also keeps the service worker alive during a long, slow scroll.
+        send({
+          type: 'FOLLOWERS_PROGRESS',
+          captureId: current.id,
+          handle: current.handle,
+          captured: lastSize,
+          pages: list.pages,
+        });
+      }
+      if (list.pages >= MAX_PAGES || idle >= 8) break;
+    }
+
+    return {
+      ...list,
+      handle: current.handle,
+      captureId: current.id,
+      reachedEnd: onFollowersPage(current.handle) && list.reachedEnd,
+    };
+  }
+
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type !== 'FOLLOWERS_COLLECT') return undefined;
+
+    const handle = String(message.handle || '').replace(/^@/, '');
+    if (!/^[A-Za-z0-9_]{1,15}$/.test(handle) || !onFollowersPage(handle)
+      || !message.captureId || Number(message.since) > documentStart()) {
+      sendResponse({ ok: false, error: 'NO_ANSWER' });
+      return undefined;
+    }
+    if (run?.id === message.captureId) {
+      sendResponse({ ok: true, doc: DOC });
+      return undefined;
+    }
+    if (run) {
+      sendResponse({ ok: false, error: 'BUSY' });
+      return undefined;
+    }
+    run = { id: message.captureId, handle, accountId: String(message.accountId || '') };
+    // Acknowledge before scrolling. Holding this response open let retries
+    // start a second run and report BUSY while the first one was still working.
+    sendResponse({ ok: true, doc: DOC });
+    collectFollowers(run)
+      .then((result) => send({ type: 'FOLLOWERS_RESULT', ...result }))
+      .catch(() => send({
+        type: 'FOLLOWERS_RESULT',
+        captureId: run.id,
+        handle,
+        entries: [],
+        reachedEnd: false,
+      }));
+    return undefined;
+  });
+
+  function documentStart() {
+    return Number(DOC.split('~')[0]);
+  }
 
   // ------------------------------------------------------------------ numbers
 

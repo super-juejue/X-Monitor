@@ -1,10 +1,10 @@
 # X Monitor
 
-One card in a Chrome side panel: your X avatar, name, @handle, and your follower,
-following and post counts. It never calls an API of its own, and the data never
-leaves this machine.
+A compact Chrome side panel for your X account and follower changes. Save a
+local follower snapshot, then compare the next capture to see who disappeared
+and who is new. No API key, no server, no uploads.
 
-![The side panel](docs/panel.png)
+![Account and follower changes, using test data](docs/panel-followers-en.png)
 
 ## What it does
 
@@ -14,16 +14,10 @@ Open the side panel and it shows the X account you are signed in as:
 - follower, following and post counts
 - when those numbers were last updated
 - a **refresh** button in the top right that asks X for new numbers
+- a **Capture followers** button that saves a local baseline
+- changes since the previous complete capture, with expandable account links
 
-That is the whole extension. There are no other pages.
-
-| Refreshing | Numbers not read yet |
-| --- | --- |
-| ![](docs/panel-refreshing.png) | ![](docs/panel-partial.png) |
-
-Light theme:
-
-![Light theme](docs/panel-light.png)
+There are no other pages. Light and dark themes follow the system.
 
 ## Install
 
@@ -63,10 +57,10 @@ X page sends /i/api/graphql            your own profile DOM
         ▼                                      ▼
 src/page-hook.js (main world)          src/content.js
         │  keeps only Viewer* / UserByScreenName* / Followers / Following
-        │  for a list it relays the owner, not the whole timeline
+        │  for Followers it also relays identities and pagination cursors
         ▼                                      │
 src/content.js (isolated world) ───────────────┘
-        │  CAPTURE / SELF_HINT / PROFILE_HINT
+        │  CAPTURE / SELF_HINT / PROFILE_HINT / FOLLOWERS_RESULT
         ▼
 src/background.js (service worker, the only writer)
         │  chrome.storage.local
@@ -79,7 +73,8 @@ side panel (renders and nothing else)
 - **Nobody else becomes you.** Only a `Viewer` response can prove who is signed
   in. Another person's profile or follower list can never overwrite your
   details, and switching accounts drops the previous account's numbers.
-- **Read-only.** The DOM is read, never injected into, clicked or scrolled.
+- **Read-only.** Never posts, likes, follows or unfollows. A requested capture
+  scrolls a temporary followers tab, not the page you are reading.
 - **Local only.** Everything lives in `chrome.storage.local`. Nothing is
   reported anywhere.
 
@@ -105,13 +100,57 @@ One detail worth knowing: a refresh only counts numbers from a page that
 and its last report repeats the numbers already on screen. Accepting that report
 makes the button report success while nothing has changed.
 
-![After a refresh](docs/panel-refresh.png)
-
 ### If you only see the @handle and no numbers
 
 Click **refresh** in the top right. It loads your profile once more and the
 numbers follow. You can also open your own profile yourself; the
 "open x.com" button reuses a tab you already have instead of opening another.
+
+## Follower snapshots
+
+1. Click **Capture followers**. A new background tab loads
+   `/your-handle/followers` and scrolls while X loads the list.
+2. A complete first capture becomes the baseline. The tab closes automatically.
+3. Click **Capture again** later. The panel compares it with the last complete
+   snapshot and shows accounts no longer in the list and new followers.
+4. Expand a change row to see the accounts and open their profiles.
+
+Every capture uses a fresh document, even if a followers tab is already open.
+Existing tabs are not reloaded, scrolled or closed. The capture button shows how
+many people have been read, and a reopened panel can see a capture in progress.
+This is on demand, not a scheduled monitor.
+
+### What gets saved
+
+The **latest two complete snapshots** are kept in `chrome.storage.local`, plus
+their latest comparison. This is a rolling baseline, not an unlimited history.
+Each entry contains only the account ID, @handle and display name. Stable account
+IDs keep a rename from looking like an unfollow followed by a new follow.
+
+The panel shows the current account's snapshots only. A capture for another
+account starts a new baseline. Nothing syncs to a server, and uninstalling the
+extension removes its local data.
+
+### Incomplete lists are not compared
+
+A list is accepted only when its pages link back to the first cursor, X returns
+a recognizable end, and the unique account count **exactly matches a fresh
+counter observed during the capture**. No percentage tolerance. A verified
+empty list with a counter of zero is a valid snapshot too.
+
+If X stalls, rate limits the page, changes its response format, omits the counter
+or returns fewer accounts than its counter reports, the capture is refused.
+Both previous snapshots and their comparison stay untouched. Storage failures
+also leave the previous baseline intact.
+
+Limits: **30,000 followers**, **400 pages**, a **45-second reading budget**
+(60 seconds overall), and an 8 MiB snapshot-storage budget. A stalled list stops
+earlier. The panel displays up to 200 account names on each side of a comparison,
+with the full change count and a notice if names were capped.
+
+“No longer following” means an account disappeared between two captures, not
+proof of an intentional unfollow. Deactivation, suspension and blocking can
+produce the same result. The exact time or reason cannot be recovered.
 
 ## Languages
 
@@ -120,7 +159,7 @@ included, and anything else falls back to English.
 
 | English | 简体中文 |
 | --- | --- |
-| ![](docs/panel.png) | ![](docs/panel-zh.png) |
+| ![](docs/panel-followers-en.png) | ![](docs/panel-followers-zh.png) |
 
 Wording and its translations live in `_locales/`, the standard Chrome message
 bundles, so adding a language means adding one folder. Numbers and dates are
@@ -132,18 +171,18 @@ hard-coded in the source.
 
 | Permission | Why |
 | --- | --- |
-| `storage` | Keep the account details and counts |
+| `storage` | Keep account details, counts and the latest two follower snapshots |
 | `sidePanel` | Show the side panel |
 | `host_permissions` | Run the content scripts on x.com and read data the page already received |
 
-There is no `tabs` permission. A refresh only needs to know whether an x.com tab
-is open, and host permissions already make that tab's url readable, so there is
-no reason to ask for more.
+There is no `tabs` permission. Creating, messaging and closing a temporary tab
+does not require it. Host permissions already make x.com tab URLs readable for
+the refresh and open-x.com actions.
 
 ## Development
 
 ```bash
-npm test                       # parsers and service worker (Node 20+)
+npm test                       # hook, content script, snapshots, worker and i18n (Node 20+)
 python3 scripts/make-icons.py  # regenerate the icons
 ```
 
@@ -156,13 +195,18 @@ _locales/           # en and zh_CN message bundles
 icons/              # extension icons
 src/
   page-hook.js      # main world, observes GraphQL responses in passing
-  content.js        # bridge, plus the @handle and the profile counts
-  background.js     # service worker: state, and how three sources merge
+  content.js        # bridge, account hints and follower-list scrolling
+  background.js     # service worker: account state, refresh and snapshot storage
   lib/              # parsing, formatting and translations (pure, tested alone)
   sidepanel/        # the panel (native ES modules, no framework)
 tests/              # node:test
 docs/               # screenshots
 ```
+
+Browser checks use a local simulated X site with the actual extension in Chrome
+for Testing: pagination, changed followers, stalled captures, tab cleanup, reload
+persistence and zero followers. Screenshots use fictional test accounts. This
+environment could not validate the feature against the live X site.
 
 ## Notes
 

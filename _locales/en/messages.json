@@ -1,6 +1,6 @@
 {
   "appDesc": {
-    "message": "Shows the X account you are signed in as in the side panel. Read-only, stored locally, no API key needed.",
+    "message": "Your X account and follower changes in the side panel. Local snapshots, read-only, no API key.",
     "description": "Extension description, shown on the chrome://extensions card"
   },
   "statFollowers": {
@@ -19,7 +19,10 @@
     "message": "Updated $WHEN$",
     "description": "Footer line: when the numbers were last read",
     "placeholders": {
-      "when": { "content": "$1", "example": "5 minutes ago" }
+      "when": {
+        "content": "$1",
+        "example": "5 minutes ago"
+      }
     }
   },
   "panelNoFollowers": {
@@ -80,13 +83,19 @@
   "timeMinutes": {
     "message": "$COUNT$ min ago",
     "placeholders": {
-      "count": { "content": "$1", "example": "5" }
+      "count": {
+        "content": "$1",
+        "example": "5"
+      }
     }
   },
   "timeHours": {
     "message": "$COUNT$ h ago",
     "placeholders": {
-      "count": { "content": "$1", "example": "3" }
+      "count": {
+        "content": "$1",
+        "example": "3"
+      }
     }
   },
   "timeYesterday": {
@@ -95,7 +104,127 @@
   "timeDays": {
     "message": "$COUNT$ d ago",
     "placeholders": {
-      "count": { "content": "$1", "example": "4" }
+      "count": {
+        "content": "$1",
+        "example": "4"
+      }
     }
+  },
+  "followersTitle": {
+    "message": "Followers snapshot",
+    "description": "Heading of the follower changes card"
+  },
+  "followersEmpty": {
+    "message": "Read your followers in a temporary background tab. Save locally and compare next time."
+  },
+  "followersCapture": {
+    "message": "Capture followers"
+  },
+  "followersRecapture": {
+    "message": "Capture again"
+  },
+  "followersCapturing": {
+    "message": "Reading the list"
+  },
+  "followersProgress": {
+    "message": "Read $COUNT$ people",
+    "placeholders": {
+      "count": { "content": "$1", "example": "820" }
+    }
+  },
+  "followersTotal": {
+    "message": "$COUNT$ people",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "1,284"
+      }
+    }
+  },
+  "followersAt": {
+    "message": "as of $WHEN$",
+    "placeholders": {
+      "when": {
+        "content": "$1",
+        "example": "5 min ago"
+      }
+    }
+  },
+  "followersFirst": {
+    "message": "First snapshot saved. The next capture will show who changed."
+  },
+  "followersSame": {
+    "message": "Nobody left or arrived since the last capture."
+  },
+  "followersUnfollowed": {
+    "message": "no longer following"
+  },
+  "followersFollowed": {
+    "message": "new"
+  },
+  "followersCaveat": {
+    "message": "Missing accounts may also be deactivated, suspended or blocked."
+  },
+  "followersShowing": {
+    "message": "Showing the first $SHOWN$ of $TOTAL$ accounts.",
+    "placeholders": {
+      "shown": { "content": "$1", "example": "200" },
+      "total": { "content": "$2", "example": "250" }
+    }
+  },
+  "followersSaved": {
+    "message": "Snapshot saved: $COUNT$ people.",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "1,284"
+      }
+    }
+  },
+  "followersFirstSaved": {
+    "message": "First snapshot saved: $COUNT$ people.",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "1,284"
+      }
+    }
+  },
+  "captureIncomplete": {
+    "message": "Could not verify a complete list. Previous snapshots kept. Refresh numbers and try again."
+  },
+  "captureIncompleteOf": {
+    "message": "Read $CAPTURED$, but X reports $EXPECTED$. Previous snapshots kept. Try again.",
+    "placeholders": {
+      "captured": {
+        "content": "$1",
+        "example": "820"
+      },
+      "expected": {
+        "content": "$2",
+        "example": "1,284"
+      }
+    }
+  },
+  "captureBusy": {
+    "message": "Already reading the list, give it a moment"
+  },
+  "captureTimeout": {
+    "message": "The list took too long to read, try again"
+  },
+  "captureNoAnswer": {
+    "message": "The followers page did not respond, try again"
+  },
+  "captureLimit": {
+    "message": "The list exceeds 30,000 people or the local storage limit. Previous snapshots kept."
+  },
+  "captureStorage": {
+    "message": "Could not save to local storage. Previous snapshots kept. Free some space and try again."
+  },
+  "captureAccountChanged": {
+    "message": "The signed-in account changed. Nothing was saved; capture again for the current account."
+  },
+  "captureFailed": {
+    "message": "Capture failed. Previous snapshots kept. Check x.com and try again."
   }
 }

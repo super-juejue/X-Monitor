@@ -9,9 +9,11 @@
  *   Viewer*            who is logged in (the only authoritative source)
  *   UserByScreenName*  a profile, with its counts
  *   Followers/Following  the list owner also carries counts, but the payload is
- *                        huge, so only the owner is forwarded
+ *                        huge, so only identity is forwarded. A Followers page
+ *                        additionally yields the people on that page, because a
+ *                        snapshot has to know who is in the list.
  *
- * Everything else is ignored — nothing is stored from tweets or people lists.
+ * Everything else is ignored — nothing is stored from tweets.
  */
 (() => {
   'use strict';
@@ -103,18 +105,152 @@
     }
   }
 
-  function handleResponse(url, status, readJson) {
+  /**
+   * One page of a followers timeline, reduced to the parts a snapshot needs:
+   * who is on it, whether this is the end, and the cursor for the next page.
+   *
+   * Cursors for the next page live in a cursor entry, not in the people, so the
+   * caller that wants a full list knows whether to keep scrolling.
+   */
+  function followersPage(payload, request) {
+    const root = payload?.data ?? payload;
+    const raw = root?.user?.result ?? root?.user_result?.result;
+    const result = raw?.__typename === 'UserWithVisibilityResults' ? raw.user : raw;
+    if (!result || typeof result !== 'object') return null;
+
+    const instructions = result.timeline?.timeline?.instructions || result.timeline_v2?.timeline?.instructions;
+    const people = [];
+    const seen = new Set();
+    let bottomCursor = '';
+    let bottomSeen = false;
+    let recognized = false;
+    let terminal = false;
+    let entryCount = 0;
+    let valid = Array.isArray(instructions) && !payload?.errors?.length;
+
+    const add = (raw) => {
+      const src = raw?.__typename === 'UserWithVisibilityResults' ? raw.user : raw;
+      if (!src || typeof src !== 'object') return;
+      if (src.__typename === 'UserUnavailable') {
+        valid = false;
+        return;
+      }
+      const id = src.rest_id || src.id_str ? String(src.rest_id || src.id_str) : '';
+      const handle = (src.core?.screen_name || src.legacy?.screen_name || '').trim();
+      if (!id) {
+        valid = false;
+        return;
+      }
+      const key = id || handle.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      people.push({
+        id,
+        handle,
+        name: String(src.core?.name || src.legacy?.name || handle).slice(0, 60),
+      });
+    };
+
+    const readEntries = (entries) => {
+      for (const entry of Array.isArray(entries) ? entries : []) {
+        entryCount += 1;
+        const content = entry?.content;
+        if (content?.promotedMetadata || /who-to-follow|suggest|recommend|promoted/i.test(entry?.entryId || '')) continue;
+        if (content?.itemContent?.user_results?.result) {
+          add(content.itemContent.user_results.result);
+        }
+        for (const sub of Array.isArray(content?.items) ? content.items : []) {
+          const item = sub?.item?.itemContent;
+          if (item?.user_results?.result) add(item.user_results.result);
+        }
+        if (content?.entryType === 'TimelineTimelineCursor' || content?.cursorType) {
+          const type = String(content.cursorType || '').toLowerCase();
+          if (type === 'bottom') {
+            bottomSeen = true;
+            bottomCursor = String(content.value || '');
+          }
+        }
+      }
+    };
+
+    for (const instruction of Array.isArray(instructions) ? instructions : []) {
+      if (Array.isArray(instruction?.entries) || instruction?.entry) {
+        recognized = true;
+        readEntries(instruction.entries);
+        if (instruction.entry) readEntries([instruction.entry]);
+      }
+      if (instruction?.type === 'TimelineTerminateTimeline' && String(instruction.direction).toLowerCase() === 'bottom') {
+        terminal = true;
+        recognized = true;
+      }
+    }
+
+    valid = valid && recognized;
+    const expected = result.legacy?.followers_count;
+    return {
+      owner: String(result.core?.screen_name || result.legacy?.screen_name || ''),
+      ownerId: String(result.rest_id || request.userId || ''),
+      requestCursor: request.cursor || '',
+      people,
+      bottomCursor,
+      expected: Number.isSafeInteger(expected) && expected >= 0 ? expected : null,
+      valid,
+      reachedEnd: valid && (terminal
+        || (people.length > 0 && !bottomSeen)
+        || (people.length === 0 && (bottomSeen || entryCount === 0))),
+    };
+  }
+
+  function requestVariables(url, body) {
+    try {
+      const query = new URL(url, location.origin).searchParams.get('variables');
+      let variables = query ? JSON.parse(query) : typeof body === 'string' ? JSON.parse(body).variables : {};
+      if (typeof variables === 'string') variables = JSON.parse(variables);
+      return {
+        cursor: typeof variables?.cursor === 'string' ? variables.cursor : '',
+        userId: variables?.userId == null ? '' : String(variables.userId),
+      };
+    } catch {
+      return {};
+    }
+  }
+
+  function handleResponse(url, status, readJson, request = {}) {
     if (status < 200 || status >= 300) return;
     const kind = kindOf(opFromUrl(url));
     if (!kind) return;
     readJson()
-      .then((payload) => {
+      .then(async (payload) => {
         if (kind !== 'owner') {
           post(url, payload);
           return;
         }
         const trimmed = ownerOnly(payload);
-        if (trimmed) post(url, trimmed);
+        if (!trimmed) return;
+
+        if (opFromUrl(url) !== 'Followers') {
+          post(url, trimmed);
+          return;
+        }
+
+        // The owner keeps the counts path working exactly as before; the people
+        // travel alongside it so the shape other readers expect is unchanged.
+        const page = followersPage(payload, await request);
+        if (!page) {
+          post(url, trimmed);
+          return;
+        }
+        post(url, trimmed);
+        window.postMessage(
+          {
+            __xmonitor: true,
+            kind: 'followers-page',
+            op: 'Followers',
+            url: String(url),
+            ...page,
+          },
+          location.origin,
+        );
       })
       .catch(() => {});
   }
@@ -129,14 +265,26 @@
       } catch {
         url = '';
       }
+      const capture = url && shouldCapture(url);
+      let request = {};
+      if (capture && opFromUrl(url) === 'Followers') {
+        try {
+          request = requestVariables(url, init?.body);
+          if (!init?.body && typeof input?.clone === 'function' && input.method !== 'GET') {
+            request = input.clone().text().then((body) => requestVariables(url, body)).catch(() => ({}));
+          }
+        } catch {
+          // Observing a used Request must never break the page's fetch.
+        }
+      }
       const promise = originalFetch.apply(this, arguments);
-      if (url && shouldCapture(url)) {
+      if (capture) {
         promise
           .then((response) => {
             try {
               const contentType = response.headers.get('content-type') || '';
               if (!/json/i.test(contentType)) return;
-              handleResponse(url, response.status, () => response.clone().json());
+              handleResponse(url, response.status, () => response.clone().json(), request);
             } catch {
               // ignore
             }
@@ -166,7 +314,8 @@
         if (url && shouldCapture(url)) {
           this.addEventListener('load', () => {
             try {
-              handleResponse(url, this.status, () => Promise.resolve(JSON.parse(this.responseText)));
+              handleResponse(url, this.status, () => Promise.resolve(JSON.parse(this.responseText)),
+                requestVariables(url, arguments[0]));
             } catch {
               // ignore
             }

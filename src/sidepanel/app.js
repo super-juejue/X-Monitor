@@ -1,7 +1,7 @@
 /**
  * Side panel.
  *
- * One card: who you are on X, and your current numbers. Everything is read from
+ * Your account, current numbers, and changes between follower snapshots. Read from
  * the worker, which gets it from X's own responses — the panel never fetches.
  * All wording comes from the message bundles, so it follows Chrome's language.
  */
@@ -42,11 +42,16 @@ const STATS = [
 /** Values already shown, so a refresh counts up from them instead of zero. */
 const numbers = {};
 let account = null;
+let followers = null;
+let remoteCapture = null;
+const expanded = new Set();
 let signature = '';
 /** Entry animations belong to the first paint only, not to every refresh. */
 let mounted = false;
 /** True while a manual refresh is in flight. */
 let busy = false;
+/** True while a follower capture is in flight. */
+let scanning = false;
 /** Transient line under the card: the result of the last refresh. */
 let note = '';
 let noteTimer = null;
@@ -58,6 +63,20 @@ const REFRESH_ERRORS = {
   BUSY: 'refreshBusy',
   TAB_FAILED: 'refreshTabFailed',
   FAILED: 'refreshFailed',
+};
+
+/** The same for a follower capture. */
+const CAPTURE_ERRORS = {
+  NO_ACCOUNT: 'refreshNoAccount',
+  BUSY: 'captureBusy',
+  TIMEOUT: 'captureTimeout',
+  INCOMPLETE: 'captureIncomplete',
+  TAB_FAILED: 'refreshTabFailed',
+  NO_ANSWER: 'captureNoAnswer',
+  LIMIT: 'captureLimit',
+  STORAGE: 'captureStorage',
+  ACCOUNT_CHANGED: 'captureAccountChanged',
+  FAILED: 'captureFailed',
 };
 
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
@@ -129,6 +148,82 @@ function emptyView() {
   </section>`;
 }
 
+function namesPreview(entries, total) {
+  const shown = entries.slice(0, 4).map((entry) => `@${esc(entry.handle || entry.name)}`);
+  const rest = total - shown.length;
+  return `<span class="names">${shown.join(' ')}${rest > 0 ? ` <span class="more">+${rest}</span>` : ''}</span>`;
+}
+
+/** Keep the card small; reveal the actual people when a change is expanded. */
+function changeHtml(kind, count, entries) {
+  const label = kind === 'gone' ? 'followersUnfollowed' : 'followersFollowed';
+  return `<details class="change-list" data-change="${kind}"${expanded.has(kind) ? ' open' : ''}>
+    <summary class="change ${kind}">
+      <span class="change-num">${kind === 'gone' ? '-' : '+'}${formatBig(count)}</span>
+      <span class="change-label">${esc(t(label))}</span>
+      ${namesPreview(entries, count)}
+    </summary>
+    <ul class="people">${entries.map((entry) => `<li>
+      ${entry.handle
+        ? `<a href="https://x.com/${encodeURIComponent(entry.handle)}" target="_blank" rel="noopener noreferrer">@${esc(entry.handle)}</a>`
+        : `<span>${esc(entry.name || entry.id)}</span>`}
+      ${entry.name && entry.name !== entry.handle ? `<span class="person-name">${esc(entry.name)}</span>` : ''}
+    </li>`).join('')}</ul>
+    ${count > entries.length ? `<p class="hint tight">${esc(t('followersShowing', [formatBig(entries.length), formatBig(count)]))}</p>` : ''}
+  </details>`;
+}
+
+function followersView(snapshot) {
+  const capturing = scanning || Boolean(remoteCapture);
+  const disabled = capturing || busy;
+  const captureText = capturing
+    ? remoteCapture?.captured ? t('followersProgress', [formatBig(remoteCapture.captured)]) : t('followersCapturing')
+    : t(snapshot ? 'followersRecapture' : 'followersCapture');
+  if (!snapshot) {
+    return `<section class="card sub${mounted ? ' instant' : ''}">
+      <div class="sub-head">
+        <span class="sub-title">${esc(t('followersTitle'))}</span>
+      </div>
+      <p class="hint tight">${esc(t('followersEmpty'))}</p>
+      <button class="btn small" type="button" data-action="capture"${disabled ? ' disabled' : ''}>
+        ${capturing ? `<span class="spinner small" aria-hidden="true"></span>` : ''}
+        <span role="status">${esc(captureText)}</span>
+      </button>
+    </section>`;
+  }
+
+  const diff = snapshot.diff;
+  const rows = [];
+  if (diff) {
+    if (diff.unfollowedCount > 0) {
+      rows.push(changeHtml('gone', diff.unfollowedCount, diff.unfollowed));
+    }
+    if (diff.followedCount > 0) {
+      rows.push(changeHtml('new', diff.followedCount, diff.followed));
+    }
+    if (!rows.length) {
+      rows.push(`<div class="change same"><span class="change-label">${esc(t('followersSame'))}</span></div>`);
+    }
+  }
+
+  return `<section class="card sub${mounted ? ' instant' : ''}">
+    <div class="sub-head">
+      <span class="sub-title">${esc(t('followersTitle'))}</span>
+      <span class="sub-meta">${esc(t('followersTotal', [formatBig(snapshot.total)]))}</span>
+    </div>
+    ${rows.join('')}
+    ${diff ? '' : `<p class="hint tight">${esc(t('followersFirst'))}</p>`}
+    ${diff?.unfollowedCount ? `<p class="hint tight caveat">${esc(t('followersCaveat'))}</p>` : ''}
+    <div class="sub-foot">
+      <span class="foot-time">${esc(t('followersAt', [relativeTime(snapshot.ts)]))}</span>
+      <button class="btn small" type="button" data-action="capture"${disabled ? ' disabled' : ''}>
+        ${capturing ? `<span class="spinner small" aria-hidden="true"></span>` : ''}
+        <span role="status">${esc(captureText)}</span>
+      </button>
+    </div>
+  </section>`;
+}
+
 function loadingView() {
   return `<div class="loading" aria-label="${esc(t('loading'))}"><span class="spinner"></span></div>`;
 }
@@ -147,7 +242,7 @@ function render() {
       </div>
       <div class="top-actions">
         ${account.self ? `<button class="icon-btn${busy ? ' spinning' : ''}" type="button" data-action="refresh"
-          title="${esc(t(busy ? 'refreshingTitle' : 'refreshTitle'))}" aria-label="${esc(t('refreshTitle'))}"${busy ? ' disabled' : ''}>
+          title="${esc(t(busy ? 'refreshingTitle' : 'refreshTitle'))}" aria-label="${esc(t('refreshTitle'))}"${busy || scanning || remoteCapture ? ' disabled' : ''}>
           ${ICONS.refresh}
         </button>` : ''}
         <button class="icon-btn" type="button" data-action="open-x" title="${esc(t('openX'))}" aria-label="${esc(t('openX'))}">
@@ -157,6 +252,7 @@ function render() {
     </header>
     <main class="content">
       ${account.self ? accountView(account) : emptyView()}
+      ${account.self ? followersView(followers) : ''}
       ${note ? `<p class="note" role="status">${esc(note)}</p>` : ''}
     </main>`;
 
@@ -204,7 +300,9 @@ function animateNumbers() {
 }
 
 function apply(next) {
-  const sig = JSON.stringify(next || null);
+  // The snapshot is part of what is drawn, so it has to be part of the change
+  // check; otherwise a new capture with the same account would not repaint.
+  const sig = JSON.stringify([next || null, followers, remoteCapture]);
   if (sig === signature) return;
   signature = sig;
   account = next;
@@ -215,7 +313,13 @@ function apply(next) {
 async function loadAccount() {
   try {
     const result = await chrome.runtime.sendMessage({ type: 'GET_ACCOUNT' });
-    apply(result?.ok ? { self: result.self, profile: result.profile, updatedAt: result.updatedAt } : null);
+    if (!result?.ok) {
+      apply(null);
+      return;
+    }
+    followers = result.followers ?? null;
+    remoteCapture = result.capture ?? null;
+    apply({ self: result.self, profile: result.profile, updatedAt: result.updatedAt });
   } catch {
     // Extension context is gone (e.g. reloaded); keep whatever is on screen.
   }
@@ -227,7 +331,7 @@ async function loadAccount() {
  * worker for how the tab is chosen.
  */
 async function refreshNow() {
-  if (busy) return;
+  if (busy || scanning || remoteCapture) return;
   busy = true;
   note = '';
   clearTimeout(noteTimer);
@@ -254,10 +358,58 @@ async function refreshNow() {
   }, 6000);
 }
 
+/**
+ * Walk the whole follower list once. Counts and names only: nothing is stored
+ * unless the capture reached the end of the list, so a partial read can never
+ * look like people leaving.
+ */
+async function captureNow() {
+  if (scanning || remoteCapture || busy) return;
+  scanning = true;
+  note = '';
+  clearTimeout(noteTimer);
+  render();
+
+  let message = '';
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'COLLECT_FOLLOWERS' });
+    if (result?.ok) {
+      message = result.first
+        ? t('followersFirstSaved', [formatBig(result.total)])
+        : t('followersSaved', [formatBig(result.total)]);
+    } else if (result?.error === 'INCOMPLETE') {
+      const captured = formatBig(result.captured || 0);
+      message = result.expected != null
+        ? t('captureIncompleteOf', [captured, formatBig(result.expected)])
+        : t(CAPTURE_ERRORS.INCOMPLETE);
+    } else {
+      message = t(CAPTURE_ERRORS[result?.error] || 'captureFailed');
+    }
+  } catch {
+    message = t('captureFailed');
+  }
+
+  await loadAccount();
+  scanning = false;
+  note = message;
+  render();
+
+  noteTimer = setTimeout(() => {
+    note = '';
+    render();
+  }, 8000);
+}
+
 app.addEventListener('click', (event) => {
   const refreshBtn = event.target.closest('[data-action="refresh"]');
   if (refreshBtn) {
     refreshNow();
+    return;
+  }
+
+  const captureBtn = event.target.closest('[data-action="capture"]');
+  if (captureBtn) {
+    captureNow();
     return;
   }
 
@@ -266,6 +418,13 @@ app.addEventListener('click', (event) => {
     openTab('https://x.com');
   }
 });
+
+app.addEventListener('toggle', (event) => {
+  const kind = event.target.dataset?.change;
+  if (!kind) return;
+  if (event.target.open) expanded.add(kind);
+  else expanded.delete(kind);
+}, true);
 
 /**
  * Prefer the tab the user already has open instead of adding another one.
@@ -293,9 +452,11 @@ chrome.runtime.onMessage.addListener((message) => {
 
 // Keep the "updated …" line honest without re-rendering (and re-animating) the card.
 setInterval(() => {
-  const el = app.querySelector('.foot-time');
+  const el = app.querySelector('.foot .foot-time');
   const ts = account?.profile?.ts;
   if (el && ts) el.textContent = t('panelUpdated', [relativeTime(ts)]);
+  const snapshotTime = app.querySelector('.sub-foot .foot-time');
+  if (snapshotTime && followers?.ts) snapshotTime.textContent = t('followersAt', [relativeTime(followers.ts)]);
 }, 30_000);
 
 // The markup is static, so its accessible label is set here instead.

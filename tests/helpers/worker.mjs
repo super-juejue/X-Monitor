@@ -10,6 +10,8 @@ export const STORAGE_KEY = 'xmonitor_account';
 
 export async function bootWorker(options = {}) {
   const store = { ...(options.store || {}) };
+  let writeError = null;
+  let writeGate = null;
   let messageListener = null;
   let nextTabId = 100;
 
@@ -18,6 +20,16 @@ export async function bootWorker(options = {}) {
   /** Tab strip the worker sees, plus a log of what it did to each tab. */
   const tabs = (options.tabs || []).map((tab) => ({ id: nextTabId++, ...tab }));
   const calls = { reload: [], create: [], remove: [], update: [] };
+
+  /**
+   * Messages the worker sends into a tab. Nothing answers by default, which is
+   * what a tab whose content script has not loaded yet looks like; a test can
+   * stand in for the content script with `answerTabs`.
+   */
+  const tabMessages = [];
+  let tabAnswer = () => {
+    throw new Error('Could not establish connection. Receiving end does not exist.');
+  };
 
   const matches = (url, patterns) => patterns.some((pattern) => {
     const prefix = pattern.replace(/\*+$/, '');
@@ -37,6 +49,10 @@ export async function bootWorker(options = {}) {
           return clone(store);
         },
         async set(patch) {
+          if ('xmonitor_followers' in patch) {
+            if (writeGate) await writeGate;
+            if (writeError) throw writeError;
+          }
           for (const [k, v] of Object.entries(patch)) store[k] = clone(v);
         },
         async remove(key) {
@@ -72,6 +88,10 @@ export async function bootWorker(options = {}) {
         Object.assign(tab, props);
         return { ...tab };
       },
+      async sendMessage(id, message) {
+        tabMessages.push({ id, message });
+        return tabAnswer(id, message);
+      },
     },
     windows: {
       async update() {},
@@ -98,7 +118,20 @@ export async function bootWorker(options = {}) {
 
   const wait = (ms = 60) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  return { store, call, wait, tabs, calls, stateNow: () => store[STORAGE_KEY] };
+  return {
+    store,
+    call,
+    wait,
+    tabs,
+    calls,
+    tabMessages,
+    /** Stand in for a content script: return an answer, or throw to mean "not there yet". */
+    answerTabs(fn) { tabAnswer = fn; },
+    failFollowerWrites(error = null) { writeError = error; },
+    holdFollowerWrites(promise = null) { writeGate = promise; },
+    stateNow: () => store[STORAGE_KEY],
+    followersNow: () => store['xmonitor_followers'],
+  };
 }
 
 // ---------------------------------------------------------------------------

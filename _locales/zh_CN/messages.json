@@ -1,6 +1,6 @@
 {
   "appDesc": {
-    "message": "在侧边栏显示当前登录的 X 账号信息。只读、本地保存、无需 API Key。",
+    "message": "在侧边栏查看 X 账号和粉丝变动。本地快照、只读、无需 API Key。",
     "description": "扩展描述，显示在 chrome://extensions 的卡片上"
   },
   "statFollowers": {
@@ -19,7 +19,10 @@
     "message": "更新于 $WHEN$",
     "description": "卡片底部：这些数字最后一次读到的相对时间",
     "placeholders": {
-      "when": { "content": "$1", "example": "5 分钟前" }
+      "when": {
+        "content": "$1",
+        "example": "5 分钟前"
+      }
     }
   },
   "panelNoFollowers": {
@@ -80,13 +83,19 @@
   "timeMinutes": {
     "message": "$COUNT$ 分钟前",
     "placeholders": {
-      "count": { "content": "$1", "example": "5" }
+      "count": {
+        "content": "$1",
+        "example": "5"
+      }
     }
   },
   "timeHours": {
     "message": "$COUNT$ 小时前",
     "placeholders": {
-      "count": { "content": "$1", "example": "3" }
+      "count": {
+        "content": "$1",
+        "example": "3"
+      }
     }
   },
   "timeYesterday": {
@@ -95,7 +104,127 @@
   "timeDays": {
     "message": "$COUNT$ 天前",
     "placeholders": {
-      "count": { "content": "$1", "example": "4" }
+      "count": {
+        "content": "$1",
+        "example": "4"
+      }
     }
+  },
+  "followersTitle": {
+    "message": "粉丝快照",
+    "description": "粉丝变动卡片的标题"
+  },
+  "followersEmpty": {
+    "message": "在临时后台页读取粉丝列表，本地保存，下次抓取就能对比变化。"
+  },
+  "followersCapture": {
+    "message": "抓取粉丝列表"
+  },
+  "followersRecapture": {
+    "message": "重新抓取"
+  },
+  "followersCapturing": {
+    "message": "正在读取列表"
+  },
+  "followersProgress": {
+    "message": "已读取 $COUNT$ 人",
+    "placeholders": {
+      "count": { "content": "$1", "example": "820" }
+    }
+  },
+  "followersTotal": {
+    "message": "$COUNT$ 人",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "1,284"
+      }
+    }
+  },
+  "followersAt": {
+    "message": "记录于 $WHEN$",
+    "placeholders": {
+      "when": {
+        "content": "$1",
+        "example": "5 分钟前"
+      }
+    }
+  },
+  "followersFirst": {
+    "message": "已保存第一份快照，下次抓取就能看出谁变了。"
+  },
+  "followersSame": {
+    "message": "和上次相比没有变化。"
+  },
+  "followersUnfollowed": {
+    "message": "人不再关注"
+  },
+  "followersFollowed": {
+    "message": "人新关注"
+  },
+  "followersCaveat": {
+    "message": "列表中消失也可能是注销、封号或拉黑，并不一定是主动取关。"
+  },
+  "followersShowing": {
+    "message": "共 $TOTAL$ 人，显示前 $SHOWN$ 人。",
+    "placeholders": {
+      "shown": { "content": "$1", "example": "200" },
+      "total": { "content": "$2", "example": "250" }
+    }
+  },
+  "followersSaved": {
+    "message": "已保存快照：$COUNT$ 人。",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "1,284"
+      }
+    }
+  },
+  "followersFirstSaved": {
+    "message": "已保存第一份快照：$COUNT$ 人。",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "1,284"
+      }
+    }
+  },
+  "captureIncomplete": {
+    "message": "无法确认列表完整，已保留旧快照。请刷新数据后再试一次。"
+  },
+  "captureIncompleteOf": {
+    "message": "读到 $CAPTURED$ 人，但 X 显示 $EXPECTED$ 人。已保留旧快照，请再试一次。",
+    "placeholders": {
+      "captured": {
+        "content": "$1",
+        "example": "820"
+      },
+      "expected": {
+        "content": "$2",
+        "example": "1,284"
+      }
+    }
+  },
+  "captureBusy": {
+    "message": "正在读列表，稍等一下"
+  },
+  "captureTimeout": {
+    "message": "读取列表超时，请再试一次"
+  },
+  "captureNoAnswer": {
+    "message": "粉丝页没有响应，请再试一次"
+  },
+  "captureLimit": {
+    "message": "粉丝超过 3 万人或超出本地存储上限，已保留旧快照。"
+  },
+  "captureStorage": {
+    "message": "本地保存失败，旧快照未变。请释放空间后重试。"
+  },
+  "captureAccountChanged": {
+    "message": "登录账号已切换，这次不保存。请为当前账号重新抓取。"
+  },
+  "captureFailed": {
+    "message": "抓取失败，已保留旧快照。请检查 x.com 后重试。"
   }
 }

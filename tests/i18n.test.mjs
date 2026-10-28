@@ -54,12 +54,13 @@ test('every key the panel asks for exists', () => {
   }
 });
 
-test('the keys reached through the error map exist too', () => {
+test('the keys reached through both error maps exist too', () => {
   const app = read('src/sidepanel/app.js');
-  const block = app.slice(app.indexOf('const REFRESH_ERRORS'), app.indexOf('};', app.indexOf('const REFRESH_ERRORS')));
-  const keys = [...block.matchAll(/'([A-Za-z0-9_@]+)'/g)]
-    .map((m) => m[1])
-    .filter((key) => key.startsWith('refresh'));
+  const blocks = ['REFRESH_ERRORS', 'CAPTURE_ERRORS'].map((name) => {
+    const start = app.indexOf(`const ${name}`);
+    return app.slice(start, app.indexOf('};', start));
+  });
+  const keys = [...blocks.join('\n').matchAll(/'([A-Za-z0-9_@]+)'/g)].map((m) => m[1]);
 
   assert.ok(keys.length >= 5, 'the error map was found');
   for (const key of keys) {
