@@ -13,7 +13,7 @@ import {
   hydrateState,
   sameHandle,
 } from './lib/constants.js';
-import { findOwner, findViewerUser, graphqlRoot, opFromUrl } from './lib/parse.js';
+import { findOwner, findViewerUser, graphqlRoot, normalizeUser, opFromUrl } from './lib/parse.js';
 
 let cache = null;
 let loading = null;
@@ -103,28 +103,48 @@ async function handleSelfHint(self) {
   return { ok: true };
 }
 
+/**
+ * Last resort: some responses (for example UsersByRestIds) nest the user
+ * instead of exposing it at a known path. Look for the account we already know
+ * about, so an unexpected shape cannot hide the numbers.
+ */
+function findKnownUser(root, handle) {
+  const seen = new Set();
+  let found = null;
+  const visit = (node, depth) => {
+    if (found || !node || typeof node !== 'object' || depth > 8 || seen.has(node)) return;
+    seen.add(node);
+    if (node.__typename && typeof node.__typename === 'string' && /User/.test(node.__typename)) {
+      const user = normalizeUser(node);
+      if (user && sameHandle(user.handle, handle)) {
+        found = user;
+        return;
+      }
+    }
+    for (const key of Object.keys(node)) visit(node[key], depth + 1);
+  };
+  visit(root, 0);
+  return found;
+}
+
 async function handleCapture(message) {
   const op = message.op || opFromUrl(message.url || '');
   const root = graphqlRoot(message.payload);
   if (!op || !root) return;
 
-  let user = null;
-  let authoritative = false;
-  if (op === 'Viewer') {
-    // The Viewer query is by definition the logged-in account.
-    user = findViewerUser(root);
-    authoritative = Boolean(user);
-  } else if (op.startsWith('UserByScreenName') || op === 'UserByRestId') {
-    user = findOwner(root);
-  }
+  const isViewer = op.startsWith('Viewer');
+  const known = (await load()).self?.handle || '';
+
+  let user = isViewer ? findViewerUser(root) : findOwner(root);
+  if (!user && known) user = findKnownUser(root, known);
   if (!user?.handle) return;
 
   const changed = await mutate((state) => {
-    const known = state.self?.handle || '';
-    // A profile page is only evidence about *you* when it is your own profile.
-    // Without a known handle this capture says nothing about who is logged in,
-    // so opening somebody else's page first must not make them "you".
-    if (!authoritative && (!known || !sameHandle(known, user.handle))) return false;
+    const current = state.self?.handle || '';
+    // A Viewer response is the only one that proves who is logged in. Every
+    // other shape is only evidence about *you* when it names the account we
+    // already know — otherwise opening someone else's page would make them you.
+    if (!isViewer && (!current || !sameHandle(current, user.handle))) return false;
 
     // Numbers belong to the account they came from.
     if (state.profile && !sameHandle(state.profile.handle, user.handle)) state.profile = null;
@@ -134,6 +154,41 @@ async function handleCapture(message) {
     return true;
   });
   if (changed) notify();
+}
+
+/**
+ * Counts read straight from your profile page. X caches its GraphQL responses,
+ * so a revisit can update the DOM without any request the hook could observe.
+ * The content script only sends this after confirming the page is your own.
+ */
+async function handleProfileHint(hint) {
+  const handle = String(hint?.handle || '').replace(/^@/, '').trim();
+  if (!/^[A-Za-z0-9_]{1,15}$/.test(handle)) return { ok: false };
+
+  const changed = await mutate((state) => {
+    const current = state.self?.handle || '';
+    // Stay strict: a hint may only describe the account we already know, or
+    // bootstrap one when the page itself proved it is your own profile.
+    if (current && !sameHandle(current, handle)) return false;
+    if (!current && !hint.verified) return false;
+
+    const counts = pickCounts({ ...(hint.counts || {}) });
+    if (!current && !counts) return false;
+
+    if (!current) state.self = mergeSelf(null, { handle, name: hint.name || '' });
+    if (state.profile && !sameHandle(state.profile.handle, handle)) state.profile = null;
+    if (counts) {
+      state.profile = {
+        handle,
+        ...(state.profile || {}),
+        ...counts,
+        ts: Date.now(),
+      };
+    }
+    return true;
+  });
+  if (changed) notify();
+  return { ok: true };
 }
 
 /** Only expose numbers that belong to the account currently shown. */
@@ -159,6 +214,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'SELF_HINT':
       handleSelfHint(message.self)
+        .then(sendResponse)
+        .catch(() => sendResponse({ ok: false }));
+      return true;
+
+    case 'PROFILE_HINT':
+      handleProfileHint(message.hint)
         .then(sendResponse)
         .catch(() => sendResponse({ ok: false }));
       return true;

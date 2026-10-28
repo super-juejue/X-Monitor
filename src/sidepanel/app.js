@@ -73,7 +73,7 @@ function statsHtml(profile) {
 function accountView(data) {
   const self = data.self;
   const profile = data.profile;
-  const ts = profile?.ts || data.updatedAt || 0;
+  const ts = profile?.ts || 0;
   return `<section class="card">
     <div class="identity">
       ${avatarHtml(self)}
@@ -88,8 +88,14 @@ function accountView(data) {
     ${statsHtml(profile)}
     <div class="foot">
       <span class="dot${profile ? ' live' : ''}"></span>
-      <span class="foot-time">${ts ? `更新于 ${relativeTime(ts)}` : '等待你的主页数据'}</span>
+      <span class="foot-time">${ts ? `更新于 ${relativeTime(ts)}` : '还没读到粉丝数'}</span>
     </div>
+    ${profile ? '' : `<p class="hint">
+      打开一次你的主页就能读到数字，插件会顺着页面已经收到的数据记下来。
+    </p>
+    <button class="btn small" type="button" data-action="open-profile">
+      ${ICONS.external}<span>打开我的主页</span>
+    </button>`}
   </section>`;
 }
 
@@ -189,14 +195,37 @@ async function refresh() {
 }
 
 app.addEventListener('click', (event) => {
-  const trigger = event.target.closest('[data-action="open-x"]');
-  if (!trigger) return;
-  try {
-    chrome.tabs.create({ url: 'https://x.com' });
-  } catch {
-    window.open('https://x.com', '_blank', 'noopener');
+  const openX = event.target.closest('[data-action="open-x"]');
+  if (openX) {
+    openTab('https://x.com');
+    return;
+  }
+
+  const openProfile = event.target.closest('[data-action="open-profile"]');
+  if (openProfile && account?.self?.handle) {
+    openTab(`https://x.com/${encodeURIComponent(account.self.handle)}`);
   }
 });
+
+/**
+ * Prefer the tab the user already has open instead of adding another one.
+ * Host permissions cover x.com, so its url is readable without the tabs
+ * permission.
+ */
+async function openTab(url) {
+  try {
+    const tabs = await chrome.tabs.query({});
+    const existing = tabs.find((tab) => /^https:\/\/(x|twitter)\.com\//.test(tab.url || ''));
+    if (existing?.id != null) {
+      await chrome.tabs.update(existing.id, { url, active: true });
+      if (existing.windowId != null) await chrome.windows.update(existing.windowId, { focused: true });
+      return;
+    }
+    await chrome.tabs.create({ url });
+  } catch {
+    window.open(url, '_blank', 'noopener');
+  }
+}
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === 'ACCOUNT_UPDATED') refresh();
@@ -205,7 +234,7 @@ chrome.runtime.onMessage.addListener((message) => {
 // Keep "更新于 …" honest without re-rendering (and re-animating) the card.
 setInterval(() => {
   const el = app.querySelector('.foot-time');
-  const ts = account?.profile?.ts || account?.updatedAt;
+  const ts = account?.profile?.ts;
   if (el && ts) el.textContent = `更新于 ${relativeTime(ts)}`;
 }, 30_000);
 

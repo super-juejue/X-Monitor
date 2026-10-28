@@ -96,13 +96,86 @@ test('your own profile refreshes the numbers', async () => {
   assert.equal(account.profile.tweets, 1290);
 });
 
-test('switching accounts drops the previous numbers', async () => {
-  await call({ type: 'SELF_HINT', self: { handle: 'otheruser', name: 'Other' } });
+test('a Viewer response without counts still identifies the account', async () => {
+  // Real Viewer payloads are sometimes trimmed. Identity must survive that.
+  await call({
+    type: 'CAPTURE',
+    op: 'Viewer2',
+    url: 'https://x.com/i/api/graphql/abc/Viewer2',
+    payload: viewerPayload({
+      __typename: 'User',
+      rest_id: '42',
+      core: { screen_name: 'testuser', name: 'Test User' },
+    }),
+  });
   await wait();
 
   const account = await call({ type: 'GET_ACCOUNT' });
-  assert.equal(account.self.handle, 'otheruser');
-  assert.equal(account.profile, null, 'counts must not carry over to another account');
+  assert.equal(account.self.handle, 'testuser');
+});
+
+test('the owner of a followers timeline supplies the counts', async () => {
+  await call({
+    type: 'SELF_HINT',
+    self: { handle: 'testuser', name: 'Test User' },
+  });
+  await wait();
+
+  await call({
+    type: 'CAPTURE',
+    op: 'Followers',
+    url: 'https://x.com/i/api/graphql/abc/Followers',
+    payload: {
+      data: {
+        user: {
+          result: {
+            rest_id: '42',
+            core: { screen_name: 'testuser', name: 'Test User' },
+            legacy: { followers_count: 2222, friends_count: 333, statuses_count: 4444 },
+          },
+        },
+      },
+    },
+  });
+  await wait();
+
+  const account = await call({ type: 'GET_ACCOUNT' });
+  assert.equal(account.profile.followers, 2222);
+  assert.equal(account.profile.following, 333);
+  assert.equal(account.profile.tweets, 4444);
+});
+
+test('a profile hint updates a partial set of counts', async () => {
+  const before = (await call({ type: 'GET_ACCOUNT' })).profile;
+
+  await call({
+    type: 'PROFILE_HINT',
+    hint: {
+      handle: 'testuser',
+      verified: true,
+      counts: { followers: 2500, following: 340 },
+    },
+  });
+  await wait();
+
+  const account = await call({ type: 'GET_ACCOUNT' });
+  assert.equal(account.profile.followers, 2500);
+  assert.equal(account.profile.following, 340);
+  assert.equal(account.profile.tweets, before.tweets, 'a missing field keeps its previous value');
+});
+
+test('a profile hint about another account is rejected', async () => {
+  const before = (await call({ type: 'GET_ACCOUNT' })).profile;
+
+  await call({
+    type: 'PROFILE_HINT',
+    hint: { handle: 'stranger', verified: true, counts: { followers: 1, following: 1 } },
+  });
+  await wait();
+
+  const account = await call({ type: 'GET_ACCOUNT' });
+  assert.equal(account.self.handle, 'testuser');
+  assert.equal(account.profile.followers, before.followers);
 });
 
 test('malformed hints and captures are ignored', async () => {
@@ -112,6 +185,15 @@ test('malformed hints and captures are ignored', async () => {
   await wait();
 
   const account = await call({ type: 'GET_ACCOUNT' });
-  assert.equal(account.self.handle, 'otheruser');
+  assert.equal(account.self.handle, 'testuser');
   assert.ok(worker.store[STORAGE_KEY], 'state stays writable');
+});
+
+test('switching accounts drops the previous numbers', async () => {
+  await call({ type: 'SELF_HINT', self: { handle: 'otheruser', name: 'Other' } });
+  await wait();
+
+  const account = await call({ type: 'GET_ACCOUNT' });
+  assert.equal(account.self.handle, 'otheruser');
+  assert.equal(account.profile, null, 'counts must not carry over to another account');
 });
