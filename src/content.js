@@ -107,22 +107,37 @@
     let reachedEnd = false;
     let expected = null;
     let valid = !overflow;
+    let ownerId = accountId;
+    let reason = '';
 
     while (pages.has(cursor) && !visited.has(cursor)) {
       visited.add(cursor);
       const page = pages.get(cursor);
+      // On a fresh /handle/followers document, the initial request supplies
+      // the owner id even when the response contains only timeline data.
+      if (!ownerId && page.ownerId) ownerId = String(page.ownerId);
       const ownerMatches = page.owner
         ? page.owner.toLowerCase() === handle.toLowerCase()
-        : Boolean(accountId && page.ownerId === accountId);
-      if (!ownerMatches || (accountId && page.ownerId && page.ownerId !== accountId)) valid = false;
-      if (page.valid !== true) valid = false;
+        : Boolean(ownerId && page.ownerId === ownerId);
+      if (!ownerMatches || (ownerId && page.ownerId && page.ownerId !== ownerId)) {
+        valid = false;
+        reason ||= 'OWNER';
+      }
+      if (page.valid !== true) {
+        valid = false;
+        reason ||= 'FORMAT';
+      }
       if (Number.isSafeInteger(page.expected) && page.expected >= 0) {
-        if (expected !== null && expected !== page.expected) valid = false;
+        if (expected !== null && expected !== page.expected) {
+          valid = false;
+          reason ||= 'COUNT_CHANGED';
+        }
         expected = page.expected;
       }
       for (const person of page.people) {
         if (!person?.id) {
           valid = false;
+          reason ||= 'FORMAT';
           continue;
         }
         people.set(String(person.id), person);
@@ -143,6 +158,8 @@
       tooLarge: overflow,
       pages: visited.size,
       expected,
+      ownerId,
+      reason: reason || (visited.size === 0 ? 'NO_PAGES' : reachedEnd ? '' : 'CURSOR_GAP'),
     };
   }
 
@@ -160,7 +177,7 @@
 
     while (Date.now() < deadline) {
       if (!onFollowersPage(current.handle)) break;
-      if (list.reachedEnd || list.tooLarge) break;
+      if (list.reachedEnd || list.tooLarge || ['OWNER', 'FORMAT', 'COUNT_CHANGED'].includes(list.reason)) break;
       await scrollToBottom();
       await sleep(650);
       list = readList(current.handle, current.accountId);
@@ -284,7 +301,8 @@
   function readProfileCounts(handle) {
     const followersLink = document.querySelector('a[href$="/followers"], a[href$="/verified_followers"]');
     const followingLink = document.querySelector(`a[href="/${handle}/following"], a[href$="/following"]`);
-    const followers = followersLink ? parseCount(followersLink.innerText || followersLink.textContent) : null;
+    const counter = readFollowerCounter(followersLink);
+    const followers = counter.value;
     const following = followingLink ? parseCount(followingLink.innerText || followingLink.textContent) : null;
 
     let posts = null;
@@ -308,7 +326,29 @@
     if (followers !== null) counts.followers = followers;
     if (following !== null) counts.following = following;
     if (posts !== null) counts.tweets = posts;
-    return Object.keys(counts).length ? counts : null;
+    return Object.keys(counts).length ? { counts, followersExact: counter.exact } : null;
+  }
+
+  /** A tooltip can carry the exact number while the visible label says "1.2K". */
+  function readFollowerCounter(link) {
+    if (!link) return { value: null, exact: false };
+    const labels = [
+      link.getAttribute('title'),
+      link.querySelector('[title]')?.getAttribute('title'),
+      link.getAttribute('aria-label'),
+      link.innerText || link.textContent,
+    ];
+    let fallback = { value: null, exact: false };
+    for (const label of labels) {
+      const value = parseCount(label);
+      if (value === null) continue;
+      const match = String(label).match(/([\d.,]+)\s*(K|M|B|万|亿)?/i);
+      if (match && !match[2] && Number.isSafeInteger(Number(match[1].replace(/,/g, '')))) {
+        return { value, exact: true };
+      }
+      if (fallback.value === null) fallback = { value, exact: false };
+    }
+    return fallback;
   }
 
   /** Name and handle as rendered on the profile page. */
@@ -332,9 +372,10 @@
     const onPage = ownProfileHandle();
     if (!onPage) return;
     const identity = readProfileIdentity();
-    const counts = readProfileCounts(onPage);
-    if (!counts) return;
-    const payload = JSON.stringify({ onPage, counts });
+    const reading = readProfileCounts(onPage);
+    if (!reading) return;
+    const { counts, followersExact } = reading;
+    const payload = JSON.stringify({ onPage, counts, followersExact });
     if (!force && payload === lastProfileSent) return;
     lastProfileSent = payload;
     send({
@@ -344,6 +385,7 @@
         name: identity.handle && identity.handle.toLowerCase() === onPage.toLowerCase() ? identity.name : '',
         verified: Boolean(document.querySelector('[data-testid="editProfileButton"]')),
         counts,
+        followersExact,
       },
     });
   }

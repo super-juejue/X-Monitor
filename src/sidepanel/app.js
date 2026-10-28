@@ -73,6 +73,11 @@ const CAPTURE_ERRORS = {
   INCOMPLETE: 'captureIncomplete',
   TAB_FAILED: 'refreshTabFailed',
   NO_ANSWER: 'captureNoAnswer',
+  NO_COUNT: 'captureNoCount',
+  NO_PAGES: 'captureNoPages',
+  UNSUPPORTED: 'captureFormat',
+  IDENTITY: 'captureOwner',
+  COUNT_CHANGED: 'captureCountChanged',
   LIMIT: 'captureLimit',
   STORAGE: 'captureStorage',
   ACCOUNT_CHANGED: 'captureAccountChanged',
@@ -177,7 +182,8 @@ function followersView(snapshot) {
   const capturing = scanning || Boolean(remoteCapture);
   const disabled = capturing || busy;
   const captureText = capturing
-    ? remoteCapture?.captured ? t('followersProgress', [formatBig(remoteCapture.captured)]) : t('followersCapturing')
+    ? remoteCapture?.stage === 'verifying' ? t('followersVerifying')
+      : remoteCapture?.captured ? t('followersProgress', [formatBig(remoteCapture.captured)]) : t('followersCapturing')
     : t(snapshot ? 'followersRecapture' : 'followersCapture');
   if (!snapshot) {
     return `<section class="card sub${mounted ? ' instant' : ''}">
@@ -379,11 +385,12 @@ async function captureNow() {
         : t('followersSaved', [formatBig(result.total)]);
     } else if (result?.error === 'INCOMPLETE') {
       const captured = formatBig(result.captured || 0);
-      message = result.expected != null
+      message = result.reason === 'COUNT_MISMATCH' && result.expected != null
         ? t('captureIncompleteOf', [captured, formatBig(result.expected)])
-        : t(CAPTURE_ERRORS.INCOMPLETE);
+        : result.reason === 'INVALID_ENTRIES' ? t('captureFormat', [captured])
+          : t('captureStopped', [captured, formatBig(result.pages || 0)]);
     } else {
-      message = t(CAPTURE_ERRORS[result?.error] || 'captureFailed');
+      message = t(CAPTURE_ERRORS[result?.error] || 'captureFailed', [formatBig(result?.captured || 0)]);
     }
   } catch {
     message = t('captureFailed');

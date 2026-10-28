@@ -14,6 +14,7 @@ export async function bootWorker(options = {}) {
   let writeGate = null;
   let messageListener = null;
   let nextTabId = 100;
+  let tabCreateHook = null;
 
   const clone = (value) => (value === undefined ? undefined : structuredClone(value));
 
@@ -73,6 +74,7 @@ export async function bootWorker(options = {}) {
         const tab = { id: nextTabId++, url: props.url, active: props.active ?? true };
         tabs.push(tab);
         calls.create.push({ ...props, id: tab.id });
+        if (tabCreateHook) await tabCreateHook(tab);
         return { ...tab };
       },
       async remove(id) {
@@ -127,6 +129,7 @@ export async function bootWorker(options = {}) {
     tabMessages,
     /** Stand in for a content script: return an answer, or throw to mean "not there yet". */
     answerTabs(fn) { tabAnswer = fn; },
+    whenCreatingTabs(fn = null) { tabCreateHook = fn; },
     failFollowerWrites(error = null) { writeError = error; },
     holdFollowerWrites(promise = null) { writeGate = promise; },
     stateNow: () => store[STORAGE_KEY],

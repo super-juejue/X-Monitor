@@ -30,7 +30,7 @@ const ack = (_id, message) => ({ ok: true, doc: `${message.since}~${message.capt
 worker.answerTabs(ack);
 
 /** Pretend the content script finished reading the list. */
-const report = (entries, { reachedEnd = true, handle = 'testuser', expected = 3, ...overrides } = {}, sender = {}) => {
+const report = (entries, { reachedEnd = true, handle = 'testuser', expected = 3, pages = 1, ...overrides } = {}, sender = {}) => {
   const active = tabMessages.at(-1);
   const url = `https://x.com/${active.message.handle}/followers`;
   return call({
@@ -39,6 +39,7 @@ const report = (entries, { reachedEnd = true, handle = 'testuser', expected = 3,
     entries,
     reachedEnd,
     expected,
+    pages,
     captureId: active.message.captureId,
     doc: `${active.message.since}~${active.message.captureId}`,
     ...overrides,
@@ -251,14 +252,116 @@ test('a real zero-follower snapshot is saved when the fresh counter is zero', as
   assert.equal(account.followers.total, 0, 'zero is still a saved snapshot');
 });
 
-test('missing fresh counts do not authorize a snapshot', async () => {
+test('a timeline-only follower response is verified against a fresh profile tab', async () => {
+  stage();
+  const pending = call({ type: 'COLLECT_FOLLOWERS' });
+  await wait();
+  await report([person(1, 'a'), person(3, 'c'), person(4, 'd')], { expected: null });
+  await wait(10);
+  assert.equal(calls.create.length, 2, 'read a fresh counter, not an old cached profile');
+  const counterTab = calls.create[1];
+  assert.equal(counterTab.url, 'https://x.com/testuser');
+  const doc = `${Date.now()}~counter`;
+  await call({
+    type: 'PROFILE_HINT', doc,
+    hint: { handle: 'testuser', counts: { followers: 3 }, followersExact: true },
+  }, { tab: { id: counterTab.id }, url: counterTab.url, frameId: 0 });
+  assert.equal((await pending).ok, true);
+  assert.equal(worker.followersNow().total, 3);
+  assert.equal(calls.remove.length, 2, 'both temporary tabs are closed');
+});
+
+test('a fresh API count verifies a timeline-only capture after the total changed', async () => {
+  stage();
+  const pending = call({ type: 'COLLECT_FOLLOWERS' });
+  await wait();
+  await report([person(1, 'a'), person(3, 'c')], { expected: null });
+  await wait(5);
+  const counterTab = calls.create[1];
+  assert.equal((await call({ type: 'GET_ACCOUNT' })).capture.stage, 'verifying');
+  await call({
+    type: 'CAPTURE', op: 'UserByScreenName', doc: `${Date.now()}~new-counter`,
+    payload: screenNamePayload(user({ counts: { followers: 2 } })),
+  }, { tab: { id: counterTab.id }, url: counterTab.url, frameId: 0 });
+  assert.equal((await pending).ok, true);
+  assert.equal(worker.followersNow().expected, 2);
+});
+
+test('a profile counter arriving before tab creation resolves is not lost', async () => {
+  globalThis.__xmonitorCounterTimeoutMs = 80;
+  worker.whenCreatingTabs(async (tab) => {
+    if (tab.url !== 'https://x.com/testuser') return;
+    await call({
+      type: 'CAPTURE', op: 'UserByScreenName', doc: `${Date.now()}~early-counter`,
+      payload: screenNamePayload(user({ counts: { followers: 2 } })),
+    }, { tab: { id: tab.id }, url: tab.url, frameId: 0 });
+  });
+  try {
+    stage();
+    const pending = call({ type: 'COLLECT_FOLLOWERS' });
+    await wait();
+    await report([person(1, 'a'), person(3, 'c')], { expected: null });
+    assert.equal((await pending).ok, true);
+    assert.equal(calls.remove.length, 2);
+  } finally {
+    worker.whenCreatingTabs();
+    delete globalThis.__xmonitorCounterTimeoutMs;
+  }
+});
+
+test('rounded labels, old documents and unrelated tabs cannot verify a missing counter', async () => {
+  globalThis.__xmonitorCounterTimeoutMs = 40;
+  try {
+    for (const mode of ['rounded', 'old-document', 'other-tab', 'subframe']) {
+      const before = worker.followersNow();
+      stage();
+      const pending = call({ type: 'COLLECT_FOLLOWERS' });
+      await wait();
+      await report([person(1, 'a'), person(3, 'c')], { expected: null });
+      await wait(5);
+      const counterTab = calls.create[1];
+      await call({
+        type: 'PROFILE_HINT',
+        doc: mode === 'old-document' ? '1000000000000~old' : `${Date.now()}~counter`,
+        hint: { handle: 'testuser', counts: { followers: 2 }, followersExact: mode !== 'rounded' },
+      }, {
+        tab: { id: mode === 'other-tab' ? -1 : counterTab.id },
+        url: counterTab.url,
+        frameId: mode === 'subframe' ? 1 : 0,
+      });
+      assert.equal((await pending).error, 'NO_COUNT', mode);
+      assert.deepEqual(worker.followersNow(), before);
+      assert.equal(calls.remove.length, 2, 'failure still closes both temporary tabs');
+    }
+  } finally {
+    delete globalThis.__xmonitorCounterTimeoutMs;
+  }
+});
+
+test('zero followers can be verified using the separate profile counter too', async () => {
+  stage();
+  const pending = call({ type: 'COLLECT_FOLLOWERS' });
+  await wait();
+  await report([], { expected: null });
+  await wait(5);
+  const counterTab = calls.create[1];
+  await call({
+    type: 'PROFILE_HINT', doc: `${Date.now()}~zero`,
+    hint: { handle: 'testuser', counts: { followers: 0 }, followersExact: true },
+  }, { tab: { id: counterTab.id }, url: counterTab.url });
+  assert.equal((await pending).ok, true);
+  assert.equal(worker.followersNow().total, 0);
+});
+
+test('missing initial pages have their own error and cannot create an empty snapshot', async () => {
   const before = worker.followersNow();
   stage();
   const pending = call({ type: 'COLLECT_FOLLOWERS' });
   await wait();
-  await report([person(1, 'a')], { expected: null });
-  assert.equal((await pending).error, 'INCOMPLETE');
+  await report([], { expected: null, reachedEnd: false, pages: 0, reason: 'NO_PAGES' });
+  assert.equal((await pending).error, 'NO_PAGES');
   assert.deepEqual(worker.followersNow(), before);
+  assert.equal(calls.create.length, 1, 'no counter tab for an unread list');
 });
 
 test('another tab, frame, capture or old document cannot report a result', async () => {
@@ -372,7 +475,7 @@ test('conflicting fresh counters refuse the capture instead of choosing one', as
     doc: `${active.message.since}~${active.message.captureId}`,
   }, { tab: { id: active.id } });
   await report([person(1, 'a'), person(3, 'c'), person(4, 'd')]);
-  assert.equal((await pending).error, 'INCOMPLETE');
+  assert.equal((await pending).error, 'COUNT_CHANGED');
   assert.deepEqual(worker.followersNow(), before);
 });
 
@@ -394,6 +497,16 @@ test('progress survives a panel reopen and refresh cannot interrupt a capture', 
   await report([person(1, 'a'), person(3, 'c'), person(4, 'd')]);
   assert.equal((await pending).ok, true);
   assert.equal((await call({ type: 'GET_ACCOUNT' })).capture, null);
+});
+
+test('the request owner must match the profile account id before saving', async () => {
+  const before = worker.followersNow();
+  stage();
+  const pending = call({ type: 'COLLECT_FOLLOWERS' });
+  await wait();
+  await report([person(1, 'a'), person(3, 'c'), person(4, 'd')], { ownerId: '999' });
+  assert.equal((await pending).error, 'IDENTITY');
+  assert.deepEqual(worker.followersNow(), before);
 });
 
 test('a different account reusing the same handle gets its own baseline', async () => {

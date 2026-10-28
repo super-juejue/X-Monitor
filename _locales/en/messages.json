@@ -126,6 +126,9 @@
   "followersCapturing": {
     "message": "Reading the list"
   },
+  "followersVerifying": {
+    "message": "Checking the total"
+  },
   "followersProgress": {
     "message": "Read $COUNT$ people",
     "placeholders": {
@@ -214,6 +217,34 @@
   },
   "captureNoAnswer": {
     "message": "The followers page did not respond, try again"
+  },
+  "captureNoCount": {
+    "message": "Read $COUNT$ people, but could not read an exact follower total. Check that you are signed in to X and try again. Previous snapshots kept.",
+    "placeholders": {
+      "count": { "content": "$1", "example": "820" }
+    }
+  },
+  "captureNoPages": {
+    "message": "Could not read the first followers page. Check that your followers page opens on X and try again. Previous snapshots kept."
+  },
+  "captureFormat": {
+    "message": "Could not recognize X's follower data after reading $COUNT$ people. Previous snapshots kept.",
+    "placeholders": {
+      "count": { "content": "$1", "example": "820" }
+    }
+  },
+  "captureOwner": {
+    "message": "Could not confirm that the list belongs to this account. Open your followers page on X and try again. Previous snapshots kept."
+  },
+  "captureCountChanged": {
+    "message": "The follower total changed during capture. Try again. Previous snapshots kept."
+  },
+  "captureStopped": {
+    "message": "The list did not reach the end ($COUNT$ people, $PAGES$ pages). Try again later. Previous snapshots kept.",
+    "placeholders": {
+      "count": { "content": "$1", "example": "820" },
+      "pages": { "content": "$2", "example": "41" }
+    }
   },
   "captureLimit": {
     "message": "The list exceeds 30,000 people or the local storage limit. Previous snapshots kept."

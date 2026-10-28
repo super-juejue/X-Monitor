@@ -126,6 +126,9 @@
   "followersCapturing": {
     "message": "正在读取列表"
   },
+  "followersVerifying": {
+    "message": "正在核对总人数"
+  },
   "followersProgress": {
     "message": "已读取 $COUNT$ 人",
     "placeholders": {
@@ -214,6 +217,34 @@
   },
   "captureNoAnswer": {
     "message": "粉丝页没有响应，请再试一次"
+  },
+  "captureNoCount": {
+    "message": "已读取 $COUNT$ 人，但没能读到准确的粉丝总数。请确认已登录 X 后重试，旧快照未变。",
+    "placeholders": {
+      "count": { "content": "$1", "example": "820" }
+    }
+  },
+  "captureNoPages": {
+    "message": "没能读到粉丝列表的起始分页。请确认 X 上的粉丝页能正常打开后重试，旧快照未变。"
+  },
+  "captureFormat": {
+    "message": "读到 $COUNT$ 人后，未能识别 X 返回的粉丝数据格式，旧快照未变。",
+    "placeholders": {
+      "count": { "content": "$1", "example": "820" }
+    }
+  },
+  "captureOwner": {
+    "message": "无法确认列表属于当前账号。请打开自己的 X 粉丝页确认后重试，旧快照未变。"
+  },
+  "captureCountChanged": {
+    "message": "抓取期间粉丝总数发生变化，请重试，旧快照未变。"
+  },
+  "captureStopped": {
+    "message": "列表未读到底（$COUNT$ 人，$PAGES$ 页）。请稍后重试，旧快照未变。",
+    "placeholders": {
+      "count": { "content": "$1", "example": "820" },
+      "pages": { "content": "$2", "example": "41" }
+    }
   },
   "captureLimit": {
     "message": "粉丝超过 3 万人或超出本地存储上限，已保留旧快照。"

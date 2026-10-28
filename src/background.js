@@ -162,13 +162,7 @@ async function handleCapture(message, sender = {}) {
     return true;
   });
   if (!changed) return;
-  if (collector && sender.tab?.id === collector.tabId
-    && sameHandle(collector.handle, user.handle) && documentStart(message.doc) >= collector.since
-    && (!collector.doc || collector.doc === message.doc)
-    && Number.isSafeInteger(counts?.followers) && counts.followers >= 0) {
-    collector.expected = counts.followers;
-    collector.expectedTs = Date.now();
-  }
+  recordFollowerCount(user.handle, counts?.followers, message.doc, sender);
   notify();
   if (counts) settleRefresh(user.handle, message.doc);
 }
@@ -178,7 +172,7 @@ async function handleCapture(message, sender = {}) {
  * so a revisit can update the DOM without any request the hook could observe.
  * The content script only sends this after confirming the page is your own.
  */
-async function handleProfileHint(hint, doc) {
+async function handleProfileHint(hint, doc, sender = {}) {
   const handle = String(hint?.handle || '').replace(/^@/, '').trim();
   if (!/^[A-Za-z0-9_]{1,15}$/.test(handle)) return { ok: false };
 
@@ -204,6 +198,9 @@ async function handleProfileHint(hint, doc) {
     return true;
   });
   if (!changed) return { ok: true };
+  // Compact labels such as "1.2K" are useful on the card, but cannot verify
+  // that exactly 1,200 people were read.
+  if (hint.followersExact === true) recordFollowerCount(handle, counts?.followers, doc, sender);
   notify();
   if (counts) settleRefresh(handle, doc);
   return { ok: true };
@@ -403,6 +400,71 @@ const collectTimeout = () => Number(globalThis.__xmonitorCollectTimeoutMs) || 60
 /** One capture at a time; the tab it opened is remembered so it can be closed. */
 let collector = null;
 
+function recordFollowerCount(handle, followers, doc, sender) {
+  if (!collector || !sameHandle(collector.handle, handle)
+    || !Number.isSafeInteger(followers) || followers < 0
+    || (sender.frameId != null && sender.frameId !== 0)) return;
+  const started = documentStart(doc);
+  const counter = collector.counter;
+  if (counter && started >= counter.since
+    && samePath(sender.url || sender.tab?.url, `https://x.com/${handle}`)) {
+    const value = { expected: followers, expectedTs: Date.now() };
+    if (sender.tab?.id === counter.tabId) counter.finish(value);
+    else if (counter.tabId == null && sender.tab?.id != null && counter.early.size < 4) {
+      // The new profile can answer before tabs.create returns its id. Bind
+      // these early counts to that id before trusting any of them.
+      counter.early.set(sender.tab.id, value);
+    }
+    return;
+  }
+  if (sender.tab?.id === collector.tabId && started >= collector.since
+    && (!collector.doc || collector.doc === doc)) {
+    collector.expected = followers;
+    collector.expectedTs = Date.now();
+  }
+}
+
+/** Followers responses may contain only a timeline, not profile counters. */
+async function readFreshFollowerCount(entry) {
+  const remaining = entry.since + collectTimeout() - Date.now();
+  if (remaining <= 0) return null;
+  const counter = { since: Date.now(), tabId: null, timer: null, early: new Map() };
+  const result = new Promise((resolve) => {
+    let done = false;
+    counter.finish = (value) => {
+      if (done) return;
+      done = true;
+      clearTimeout(counter.timer);
+      resolve(value);
+    };
+    counter.timer = setTimeout(() => counter.finish(null),
+      Math.min(Number(globalThis.__xmonitorCounterTimeoutMs) || 15_000, remaining));
+  });
+  entry.counter = counter;
+  entry.stage = 'verifying';
+  notify();
+  try {
+    const tab = await chrome.tabs.create({ url: `https://x.com/${entry.handle}`, active: false });
+    counter.tabId = tab?.id ?? null;
+    if (counter.tabId == null) counter.finish(null);
+    else if (counter.early.has(counter.tabId)) counter.finish(counter.early.get(counter.tabId));
+    return await result;
+  } catch {
+    counter.finish(null);
+    return null;
+  } finally {
+    counter.finish(null);
+    entry.counter = null;
+    if (counter.tabId != null) {
+      try {
+        await chrome.tabs.remove(counter.tabId);
+      } catch {
+        // The temporary profile was already closed.
+      }
+    }
+  }
+}
+
 function startCollector(handle, accountId) {
   let entry = null;
   const promise = new Promise((resolve) => {
@@ -423,6 +485,7 @@ function startCollector(handle, accountId) {
       expected: null,
       expectedTs: 0,
       captured: 0,
+      stage: 'reading',
       settled: false,
       timer: setTimeout(() => finish({ ok: false, error: 'TIMEOUT' }), collectTimeout()),
     };
@@ -493,25 +556,49 @@ async function collectFollowers() {
     }
 
     const entries = collectEntries(outcome.entries);
-    // A count from this very document, not a profile cached before people left.
-    const expected = Number.isSafeInteger(outcome.expected) && outcome.expected >= 0
+    let expected = Number.isSafeInteger(outcome.expected) && outcome.expected >= 0
       ? outcome.expected : entry.expected;
-    const expectedTs = expected === outcome.expected ? Date.now() : entry.expectedTs;
+    let expectedTs = expected === outcome.expected ? Date.now() : entry.expectedTs;
+    if (entries.length !== outcome.entries.length || entries.some((person) => !person.id)) {
+      return { ok: false, error: 'INCOMPLETE', reason: 'INVALID_ENTRIES', captured: entries.length };
+    }
+    if (outcome.reachedEnd !== true || outcome.pages === 0) {
+      const errors = { NO_PAGES: 'NO_PAGES', FORMAT: 'UNSUPPORTED', OWNER: 'IDENTITY', COUNT_CHANGED: 'COUNT_CHANGED' };
+      return {
+        ok: false,
+        error: outcome.pages === 0 ? 'NO_PAGES' : errors[outcome.reason] || 'INCOMPLETE',
+        reason: 'NOT_FINISHED',
+        captured: entries.length,
+        pages: outcome.pages,
+        expected,
+      };
+    }
+    // Do not require profile fields to be embedded in a Followers response.
+    // Read a new, account-scoped profile counter instead of trusting old storage.
+    if (!Number.isSafeInteger(expected) || expected < 0) {
+      entry.captured = entries.length;
+      const fresh = await readFreshFollowerCount(entry);
+      if (!fresh) return { ok: false, error: 'NO_COUNT', captured: entries.length };
+      ({ expected, expectedTs } = fresh);
+    }
     const conflictingCounts = entry.expected !== null && Number.isSafeInteger(outcome.expected)
       && entry.expected !== outcome.expected;
-    if (conflictingCounts || entries.length !== outcome.entries.length || entries.some((person) => !person.id)
-      || !isCompleteCapture({
-        reachedEnd: outcome.reachedEnd === true,
-        captured: entries.length,
-        expected,
-        expectedTs,
-      })) {
-      return { ok: false, error: 'INCOMPLETE', captured: entries.length, expected };
+    if (conflictingCounts) return { ok: false, error: 'COUNT_CHANGED', captured: entries.length };
+    if (!isCompleteCapture({
+      reachedEnd: outcome.reachedEnd === true,
+      captured: entries.length,
+      expected,
+      expectedTs,
+    })) {
+      return { ok: false, error: 'INCOMPLETE', reason: 'COUNT_MISMATCH', captured: entries.length, expected };
     }
     const previous = await loadFollowers();
     const current = (await load()).self;
     if (!sameHandle(current?.handle, handle) || (entry.accountId && current?.id !== entry.accountId)) {
       return { ok: false, error: 'ACCOUNT_CHANGED' };
+    }
+    if (outcome.ownerId && current?.id && outcome.ownerId !== current.id) {
+      return { ok: false, error: 'IDENTITY', captured: entries.length };
     }
     const sameAccount = previous.ts > 0 && belongsToAccount(previous, current);
     const diff = sameAccount ? { ...diffFollowers(previous.entries, entries), fromTs: previous.ts } : null;
@@ -592,6 +679,9 @@ function handleFollowersResult(message, sender) {
     reachedEnd: message.reachedEnd === true,
     expected: message.expected,
     tooLarge: Boolean(message.tooLarge),
+    pages: Number.isSafeInteger(message.pages) ? message.pages : 0,
+    reason: typeof message.reason === 'string' ? message.reason : '',
+    ownerId: typeof message.ownerId === 'string' ? message.ownerId : '',
   });
   return { ok: true };
 }
@@ -617,7 +707,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
 
     case 'PROFILE_HINT':
-      handleProfileHint(message.hint, message.doc)
+      handleProfileHint(message.hint, message.doc, sender)
         .then(sendResponse)
         .catch(() => sendResponse({ ok: false }));
       return true;
@@ -628,7 +718,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           ok: true,
           ...publicAccount(state),
           followers: await publicFollowers(state),
-          capture: collector ? { captured: collector.captured } : null,
+          capture: collector ? { captured: collector.captured, stage: collector.stage } : null,
         }))
         .catch(() => sendResponse({ ok: false }));
       return true;

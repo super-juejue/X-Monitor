@@ -159,3 +159,21 @@ test('following and verified-only responses never become full follower lists', a
     assert.equal(messages.length, 1);
   }
 });
+
+test('a timeline-only result carries the requested owner id without inventing a count', async () => {
+  const full = payload([item(1, 'one'), cursor('next')]);
+  const body = { data: { user: { result: { timeline: full.data.user.result.timeline } } } };
+  const { page } = await observe(body);
+  assert.equal(page.owner, '');
+  assert.equal(page.ownerId, '42');
+  assert.equal(page.people[0].id, '1');
+  assert.equal(page.expected, null);
+  assert.equal(page.valid, true);
+});
+
+test('a bottom cursor that repeats the requested cursor ends a recognized timeline', async () => {
+  const { page } = await observe(payload([item(1, 'one'), cursor('last')]), {
+    variables: { userId: '42', cursor: 'last' },
+  });
+  assert.equal(page.reachedEnd, true);
+});

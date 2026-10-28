@@ -197,6 +197,7 @@
       valid,
       reachedEnd: valid && (terminal
         || (people.length > 0 && !bottomSeen)
+        || (bottomSeen && Boolean(request.cursor) && bottomCursor === request.cursor)
         || (people.length === 0 && (bottomSeen || entryCount === 0))),
     };
   }

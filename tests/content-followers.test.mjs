@@ -10,7 +10,7 @@ const page = (requestCursor, people, { bottomCursor = '', reachedEnd = false, ..
   reachedEnd, expected: 2, valid: true, ...rest,
 });
 
-function boot(path = '/testuser/followers') {
+function boot(path = '/testuser/followers', selectors = {}) {
   let listener;
   let bridge;
   const messages = [];
@@ -26,14 +26,14 @@ function boot(path = '/testuser/followers') {
     document: {
       documentElement: { scrollHeight: 1000 },
       body: { scrollHeight: 1000 },
-      querySelector: () => null,
+      querySelector: (selector) => selectors[selector] || null,
     },
     chrome: { runtime: {
       onMessage: { addListener(fn) { listener = fn; } },
       sendMessage(message) { messages.push(structuredClone(message)); return Promise.resolve({ ok: true }); },
     } },
     MutationObserver: class { observe() {} disconnect() {} },
-    setTimeout(fn, delay) { return delay <= 650 ? setTimeout(fn, 1) : 0; },
+    setTimeout(fn, delay) { return delay <= 650 || (path === '/testuser' && delay === 1200) ? setTimeout(fn, 1) : 0; },
     clearTimeout,
     setInterval() {},
   });
@@ -120,4 +120,43 @@ test('navigating away while scrolling makes the capture incomplete', async () =>
   content.start();
   content.location.pathname = '/home';
   assert.equal((await content.result()).reachedEnd, false);
+});
+
+test('timeline-only pages bind the request owner on a fresh followers URL', async () => {
+  const content = boot();
+  content.emit(page('', [person(1), person(2)], { owner: '', expected: null, reachedEnd: true }));
+  content.start({ accountId: '' });
+  const result = await content.result();
+  assert.equal(result.reachedEnd, true);
+  assert.equal(result.expected, null, 'a missing counter is not invented');
+});
+
+test('a mismatched owner on a later page cannot join the initial request', async () => {
+  const content = boot();
+  content.emit(page('', [person(1)], { owner: '', bottomCursor: 'next' }));
+  content.emit(page('next', [person(2)], { owner: '', ownerId: '999', reachedEnd: true }));
+  content.start({ accountId: '' });
+  const result = await content.result();
+  assert.equal(result.reachedEnd, false);
+  assert.equal(result.reason, 'OWNER');
+});
+
+test('profile hints distinguish exact numbers from compact labels', async () => {
+  for (const title of ['', '1,234']) {
+    const followersLink = {
+      innerText: '1.2K Followers',
+      getAttribute: (name) => name === 'title' ? title : '',
+      querySelector: () => null,
+      closest: () => ({ parentElement: { querySelectorAll: () => [] } }),
+    };
+    const content = boot('/testuser', {
+      '[data-testid="editProfileButton"]': {},
+      'a[href$="/followers"], a[href$="/verified_followers"]': followersLink,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const hint = content.messages.find((message) => message.type === 'PROFILE_HINT')?.hint;
+    assert.ok(hint);
+    assert.equal(hint.counts.followers, title ? 1234 : 1200);
+    assert.equal(hint.followersExact, Boolean(title));
+  }
 });

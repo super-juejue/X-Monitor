@@ -138,10 +138,18 @@ a recognizable end, and the unique account count **exactly matches a fresh
 counter observed during the capture**. No percentage tolerance. A verified
 empty list with a counter of zero is a valid snapshot too.
 
-If X stalls, rate limits the page, changes its response format, omits the counter
-or returns fewer accounts than its counter reports, the capture is refused.
+The Followers response does not have to include profile fields. If it contains
+only timeline data, a second temporary tab loads your profile to read a fresh,
+exact counter. Both temporary tabs close automatically. Rounded labels such as
+"1.2K" cannot verify a list; an exact API count or full-number tooltip is needed.
+
+If X stalls, rate limits the page, changes its response format, provides no exact
+counter on either page or returns fewer accounts than its counter reports, the
+capture is refused.
 Both previous snapshots and their comparison stay untouched. Storage failures
-also leave the previous baseline intact.
+also leave the previous baseline intact. The panel distinguishes missing pages,
+missing counters, unrecognized data and a list that stopped early, instead of
+showing the same generic completeness error for all of them.
 
 Limits: **30,000 followers**, **400 pages**, a **45-second reading budget**
 (60 seconds overall), and an 8 MiB snapshot-storage budget. A stalled list stops
