@@ -264,8 +264,12 @@ function upsertTweets(acct, tweets, now) {
 // Capture ingestion
 // ---------------------------------------------------------------------------
 
-function applyCapture(state, op, root, url, now) {
+function applyCapture(state, op, root, pageUrl, now) {
   const noAccounts = Object.keys(state.accounts).length === 0;
+  // The request url is an /i/api/graphql/... endpoint, so it never carries a
+  // handle. Owner lookups come from the payload; the page url is the fallback.
+  const pageHandle = handleFromUrl(pageUrl || '');
+  const owner = findOwner(root);
 
   if (op === 'Viewer') {
     const user = findViewerUser(root);
@@ -279,7 +283,7 @@ function applyCapture(state, op, root, url, now) {
   }
 
   if (op.startsWith('UserByScreenName')) {
-    const user = findOwner(root);
+    const user = owner;
     if (!user?.handle) return null;
     const key = accountKey(user.handle);
     const acct = state.accounts[key];
@@ -295,35 +299,39 @@ function applyCapture(state, op, root, url, now) {
   }
 
   if (op === 'Followers' || op === 'Following') {
-    const owner = findOwner(root);
-    if (!owner?.handle) return null;
-    const key = accountKey(owner.handle);
+    const handle = owner?.handle || pageHandle;
+    if (!handle) return null;
+    const key = accountKey(handle);
     const kind = op === 'Followers' ? 'followers' : 'following';
     const { users } = extractTimeline(root);
     const acct = state.accounts[key];
     if (!acct) {
-      if (!noAccounts || (!users.length && typeof owner.followers !== 'number')) return null;
-      return { buffered: true, kind, ownerHandle: owner.handle, ownerKey: key, owner, users, ts: now };
+      if (!noAccounts || (!users.length && typeof owner?.followers !== 'number')) return null;
+      return { buffered: true, kind, ownerHandle: handle, ownerKey: key, owner, users, ts: now };
     }
-    acct.self = mergeSelf(acct.self, owner);
-    if (typeof owner.followers === 'number') snapshotProfile(acct, owner, now);
+    if (owner) acct.self = mergeSelf(acct.self, owner);
+    if (typeof owner?.followers === 'number') snapshotProfile(acct, owner, now);
     const added = applyPeople(acct, kind, users, now);
     acct.updatedAt = now;
     state.meta.lastCaptureAt = now;
-    return { accountKey: key, kind, owner, users, added, empty: users.length === 0 };
+    return { accountKey: key, kind, owner: owner || { handle }, users, added, empty: users.length === 0 };
   }
 
   if (op.startsWith('UserTweets') || op === 'UserMedia') {
-    const pathHandle = handleFromUrl(url);
-    if (!pathHandle) return null;
-    const key = accountKey(pathHandle);
+    // The timeline owner is in the payload; the page url (for example
+    // /someone) is only a fallback for responses that omit it.
+    const handle = owner?.handle || pageHandle;
+    if (!handle) return null;
+    const key = accountKey(handle);
     const { tweets } = extractTimeline(root);
     const acct = state.accounts[key];
     if (!acct) {
       if (!noAccounts || !tweets.length) return null;
-      return { buffered: true, kind: 'tweets', ownerHandle: pathHandle, ownerKey: key, tweets, ts: now };
+      return { buffered: true, kind: 'tweets', ownerHandle: handle, ownerKey: key, tweets, ts: now };
     }
-    const own = tweets.filter((tweet) => accountKey(tweet.authorHandle) === key && !tweet.isRetweet);
+    // Replies and quote tweets are authored by the owner; retweets are not.
+    const own = tweets.filter((tweet) => !tweet.isRetweet
+      && (!tweet.authorHandle || accountKey(tweet.authorHandle) === key));
     if (!own.length) return null;
     upsertTweets(acct, own, now);
     acct.updatedAt = now;
@@ -424,7 +432,7 @@ async function handleCapture(message, sender) {
   const root = graphqlRoot(payload);
   if (!root) return;
 
-  const outcome = await mutate((state) => applyCapture(state, op, root, message.url || '', Date.now()));
+  const outcome = await mutate((state) => applyCapture(state, op, root, message.pageUrl || '', Date.now()));
   if (!outcome) return;
   if (outcome.buffered) {
     bufferOutcome(outcome);
@@ -688,7 +696,10 @@ async function finishSync({ endReached, reason }) {
         ? (typeof acct.profile?.current?.following === 'number' ? acct.profile.current.following : null)
         : (typeof acct.profile?.current?.followers === 'number' ? acct.profile.current.followers : null);
       const suspiciousRatio = 0.2;
-      const safeEnd = Boolean(endReached) && !(captured === 0 && expected !== null && expected > 0);
+      // A scan that captured nobody proves nothing, unless the account really
+      // has an empty list. Never let it set a baseline or remove anyone.
+      const capturedNothing = captured === 0 && expected !== 0;
+      const safeEnd = Boolean(endReached) && !capturedNothing;
 
       if (isFollowers || isFollowing) {
         const kind = isFollowers ? 'followers' : 'following';
@@ -725,7 +736,7 @@ async function finishSync({ endReached, reason }) {
           lastCompleteAt: complete ? now : (acct.sync[kind]?.lastCompleteAt || null),
           complete,
           count: Object.keys(map).length,
-          lastReason: suspicious ? 'partial' : reason,
+          lastReason: capturedNothing ? 'empty_scan' : suspicious ? 'partial' : reason,
           lastCaptured: captured,
         };
         acct.updatedAt = now;
@@ -733,7 +744,9 @@ async function finishSync({ endReached, reason }) {
       }
 
       if (current.kind === 'tweets') {
-        const complete = reason === 'finished' || reason === 'end_of_list' || reason === 'stalled';
+        // Tweets are additive: partial scans are still useful, only a failed
+        // start or a cancel counts as incomplete.
+        const complete = !['cancelled', 'rate_limited', 'login_required', 'navigated', 'disconnected', 'timeout', 'page_not_ready', 'tab_closed'].includes(reason);
         acct.sync.tweets = {
           lastAt: now,
           count: Object.keys(acct.tweets || {}).length,

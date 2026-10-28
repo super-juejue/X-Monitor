@@ -168,6 +168,67 @@ test('unknown accounts are ignored once an account exists', async () => {
   assert.equal(state.accounts.testuser.self.handle, before);
 });
 
+test('tweets are captured from the GraphQL api url', async () => {
+  const tweet = {
+    __typename: 'Tweet',
+    rest_id: '9001',
+    core: {
+      user_results: { result: { ...profile } },
+      created_at: 'Wed Oct 10 20:19:24 +0000 2018',
+    },
+    legacy: {
+      full_text: 'a real post',
+      created_at: 'Wed Oct 10 20:19:24 +0000 2018',
+      favorite_count: 12,
+      retweet_count: 3,
+      reply_count: 2,
+      quote_count: 1,
+    },
+    views: { count: '456' },
+  };
+  const payload = {
+    data: {
+      user: {
+        result: {
+          ...profile,
+          timeline: {
+            timeline: {
+              instructions: [{
+                type: 'TimelineAddEntries',
+                entries: [{
+                  entryId: 'tweet-9001',
+                  content: {
+                    entryType: 'TimelineTimelineItem',
+                    itemContent: { itemType: 'TimelineTweet', tweet_results: { result: tweet } },
+                  },
+                }],
+              }],
+            },
+          },
+        },
+      },
+    },
+  };
+
+  // The api url has no handle in it; only the page url does.
+  await call({
+    type: 'CAPTURE',
+    op: 'UserTweets',
+    url: 'https://x.com/i/api/graphql/abc123/UserTweets?variables=%7B%7D',
+    pageUrl: 'https://x.com/testuser',
+    status: 200,
+    payload,
+  }, { tab: { id: 1 } });
+  await wait();
+
+  const acct = stateNow().accounts.testuser;
+  assert.deepEqual(Object.keys(acct.tweets), ['9001']);
+  assert.equal(acct.tweets['9001'].text, 'a real post');
+  assert.equal(acct.tweets['9001'].likes, 12);
+  assert.equal(acct.tweets['9001'].views, 456);
+  assert.equal(acct.tweets['9001'].url, 'https://x.com/testuser/status/9001');
+});
+
 test('the badge shows the signed daily net change', async () => {
   await call({ type: 'UPDATE_SETTINGS', settings: { badge: true } });
   await wait();

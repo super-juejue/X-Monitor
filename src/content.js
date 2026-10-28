@@ -30,6 +30,7 @@
       type: 'CAPTURE',
       op: data.op || '',
       url: data.url || '',
+      pageUrl: location.href,
       status: data.status || 0,
       payload: data.payload ?? null,
     });
@@ -162,6 +163,7 @@
       startedAt: Date.now(),
       ticks: 0,
       stable: 0,
+      hiddenTicks: 0,
       lastHeight: 0,
       lastTop: 0,
       timer: null,
@@ -261,17 +263,17 @@
       return;
     }
 
-    if (document.hidden) {
-      postProgress(session);
-      session.timer = setTimeout(() => tickScroll(session), 1200);
-      return;
-    }
-
+    // Keep scrolling even when the tab is in the background: browsers throttle
+    // hidden tabs but they still scroll and still load. Skipping the scroll
+    // entirely would leave the scan stuck until the watchdog fires.
+    const hidden = document.hidden;
     const scroller = getScroller();
     scrollToBottom(scroller);
     session.ticks += 1;
+    session.hiddenTicks = hidden ? session.hiddenTicks + 1 : session.hiddenTicks;
     postProgress(session);
-    session.timer = setTimeout(() => afterScroll(session, scroller), session.tickMs);
+    const wait = hidden ? Math.max(session.tickMs, 1200) : session.tickMs;
+    session.timer = setTimeout(() => afterScroll(session, scroller), wait);
   }
 
   function afterScroll(session, scroller) {
@@ -311,9 +313,10 @@
     const stallLimit = session.kind === 'tweets' ? 8 : 12;
     if (session.stable >= stallLimit) {
       // The timeline stopped growing after nudging, which is the DOM-level
-      // "end of list" signal. The background still validates the scan before
-      // it is allowed to mark anyone as unfollowed.
-      finishScroll('stalled', true);
+      // "end of list" signal. A scan that stalled while the tab was hidden is
+      // not trustworthy: X pauses loading in background tabs, so the stall may
+      // simply mean "throttled", not "finished".
+      finishScroll('stalled', !document.hidden);
       return;
     }
     session.timer = setTimeout(() => tickScroll(session), 120);

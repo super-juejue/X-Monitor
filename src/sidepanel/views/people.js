@@ -34,8 +34,9 @@ export function peopleView(ctx) {
   const syncKind = filter === 'following' ? 'following' : 'followers';
   const busy = Boolean(ctx.ui.sync?.running);
   const lastSync = dash.sync?.[syncKind]?.lastAt;
-  const incomplete = dash.sync?.followers && dash.sync.followers.complete === false;
-  const expected = dash.current?.followers;
+  const syncInfo = dash.sync?.[syncKind];
+  const incomplete = syncInfo && syncInfo.complete === false;
+  const expected = syncKind === 'following' ? dash.current?.following : dash.current?.followers;
 
   return `<div class="stack">
     <div class="view-head">
@@ -57,9 +58,7 @@ export function peopleView(ctx) {
       <button type="button" data-action="people-filter" data-filter="lost" class="${filter === 'lost' ? 'active' : ''}">取关 <span>${formatBig(counts.lost)}</span></button>
     </div>
 
-    ${filter === 'followers' && incomplete
-      ? `<div class="callout warn">${icon('alert', 14)}<span>上次粉丝同步未完成，取关检测可能不准确。建议保持同步标签页在前台后重试。</span></div>`
-      : ''}
+    ${incomplete ? incompleteCallout(syncInfo, expected, filter) : ''}
 
     ${filter === 'followers' && !counts.followers && expected
       ? `<div class="callout">${icon('users', 14)}<span>主页显示你有 ${formatBig(expected)} 位粉丝，但名单还未同步。完成一次同步即可查看明细。</span></div>`
@@ -78,6 +77,23 @@ export function peopleView(ctx) {
       ? `<button class="btn ghost wide" data-action="more-people">加载更多 · 还剩 ${formatInt(filtered.length - visible.length)} 位</button>`
       : ''}
   </div>`;
+}
+
+function incompleteCallout(syncInfo, expected, filter) {
+  const label = filter === 'following' ? '关注' : '粉丝';
+  const captured = Number(syncInfo?.lastCaptured) || 0;
+  const count = Number(syncInfo?.count) || 0;
+  const reason = syncInfo?.lastReason;
+  const shortfall = typeof expected === 'number' && expected > count;
+  const detail = shortfall
+    ? `本次抓到 ${formatInt(captured)} 位，名单共 ${formatInt(count)} 位，主页显示 ${formatInt(expected)} 位。`
+    : `本次抓到 ${formatInt(captured)} 位。`;
+  const advice = reason === 'rate_limited'
+    ? 'X 限制了请求频率，请等 15 分钟后再同步一次。'
+    : shortfall
+      ? `名单还没抓全，多同步几次即可补齐；抓全之前不会误判取关。`
+      : '保持同步标签页在前台后重试。';
+  return `<div class="callout warn">${icon('alert', 14)}<span>上次${label}同步未完成。${detail}${advice}</span></div>`;
 }
 
 function peopleEmpty(filter, query, ctx) {
