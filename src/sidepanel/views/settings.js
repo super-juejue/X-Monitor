@@ -44,7 +44,7 @@ export function settingsView(ctx) {
 
     <section class="card settings-card">
       <div class="settings-head">
-        <div><h2>同步</h2><p class="settings-sub">同步会临时打开一个 X 标签页</p></div>
+        <div><h2>同步</h2><p class="settings-sub">复用已打开的 X 页面，没有才新开</p></div>
       </div>
       <div class="range-row">
         <div class="range-head">
@@ -57,10 +57,10 @@ export function settingsView(ctx) {
       ${switchControl({
         setting: 'closeSyncTab',
         checked: Boolean(settings.closeSyncTab),
-        label: '完成后自动关闭标签页',
-        description: '关闭由插件打开的同步标签页',
+        label: '完成后关闭插件开的标签页',
+        description: '你自己打开的页面会保留',
       })}
-      <p class="settings-note">${icon('alert', 12)} 同步时长越长，可抓取的粉丝越多；X 可能限制请求频率，遇到限流时已抓取的数据会保留。</p>
+      <p class="settings-note">${icon('alert', 12)} 同步会先刷新目标页面再从头滚动，这样才看得出谁不在了。时长越长抓到的粉丝越多；X 可能限制请求频率，遇到限流时已抓取的数据会保留。</p>
     </section>
 
     <section class="card settings-card">

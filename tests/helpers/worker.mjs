@@ -8,13 +8,24 @@
 
 export const STORAGE_KEY = 'xmonitor_state';
 
-export async function bootWorker(seed = null) {
+/**
+ * @param seed initial stored state
+ * @param options.reuseTab pretend the user already has an x.com followers tab
+ *   open, so a sync has to reuse it instead of creating one.
+ * @param options.tabUrl url reported for that pre-existing tab
+ */
+export async function bootWorker(seed = null, options = {}) {
   const store = {};
   if (seed) store[STORAGE_KEY] = structuredClone(seed);
+
+  const reuseTab = Boolean(options.reuseTab);
+  const tabUrl = options.tabUrl || 'https://x.com/testuser/followers';
 
   const badge = { text: '', color: '' };
   const notifications = [];
   const removedTabs = [];
+  const reloadedTabs = [];
+  const updatedTabs = [];
   const clone = (value) => (value === undefined ? undefined : structuredClone(value));
 
   let messageListener = null;
@@ -51,14 +62,26 @@ export async function bootWorker(seed = null) {
         return { id: tabId, status: 'complete' };
       },
       async query() {
-        return [{ id: 1, active: true }];
+        if (!reuseTab) return [{ id: 1, active: true }];
+        return [{ id: 1, active: true, url: tabUrl, lastAccessed: Date.now() }];
       },
       async sendMessage(tabId, message) {
-        if (message?.type === 'PING') return { ok: true, href: 'https://x.com/testuser' };
+        if (message?.type === 'PING') {
+          // A live document answers with the moment it was created. The reused
+          // tab is reloaded, so the answer is always newer than the reload.
+          return { ok: true, href: tabUrl, docStartedAt: Date.now() };
+        }
         return { ok: true };
       },
       async remove(tabId) {
         removedTabs.push(tabId);
+      },
+      async update(tabId, props) {
+        updatedTabs.push({ tabId, props });
+        return { id: tabId, ...props };
+      },
+      async reload(tabId) {
+        reloadedTabs.push(tabId);
       },
       onUpdated: { addListener() {}, removeListener() {} },
       onRemoved: { addListener() {}, removeListener() {} },
@@ -121,7 +144,7 @@ export async function bootWorker(seed = null) {
     };
   };
 
-  return { store, badge, notifications, removedTabs, call, wait, stateNow, openSyncPort };
+  return { store, badge, notifications, removedTabs, reloadedTabs, updatedTabs, call, wait, stateNow, openSyncPort };
 }
 
 // ---------------------------------------------------------------------------

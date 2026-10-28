@@ -174,6 +174,17 @@ function pushEvent(acct, type, user, now) {
   }
 }
 
+/** Minimal person record kept inside version history. */
+function slimPerson(person) {
+  return {
+    id: String(person?.id || ''),
+    handle: person?.handle || '',
+    name: person?.name || '',
+    avatar: person?.avatar || '',
+    verified: Boolean(person?.verified),
+  };
+}
+
 function trimMap(map, max, field = 'lastSeen') {
   const entries = Object.entries(map);
   if (entries.length <= max) return;
@@ -528,10 +539,14 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function pingTab(tabId) {
+async function pingTab(tabId, minDocStartedAt = 0) {
   try {
     const response = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
-    return Boolean(response?.ok);
+    if (!response?.ok) return false;
+    // After a reload the old document can still answer for a moment. Only a
+    // document created after the reload started counts.
+    if (minDocStartedAt && Number(response.docStartedAt || 0) < minDocStartedAt) return false;
+    return true;
   } catch {
     return false;
   }
@@ -566,14 +581,28 @@ function waitForTabComplete(tabId, timeout) {
   });
 }
 
-async function waitForContent(tabId, timeout) {
+async function waitForContent(tabId, timeout, minDocStartedAt = 0) {
   const started = Date.now();
   await waitForTabComplete(tabId, timeout);
   while (Date.now() - started < timeout) {
-    if (await pingTab(tabId)) return true;
+    if (await pingTab(tabId, minDocStartedAt)) return true;
     await sleep(350);
   }
   return false;
+}
+
+/** True when two urls point at the same x.com page (path, case-insensitive). */
+function samePage(a, b) {
+  try {
+    const ua = new URL(a);
+    const ub = new URL(b);
+    const host = (u) => u.hostname.replace(/^www\./, '').toLowerCase();
+    if (host(ua) !== host(ub)) return false;
+    const path = (u) => u.pathname.replace(/\/+$/, '').toLowerCase();
+    return path(ua) === path(ub);
+  } catch {
+    return false;
+  }
 }
 
 async function runSync(kind) {
@@ -597,15 +626,37 @@ async function runSync(kind) {
   const tickMs = Math.min(2000, Math.max(500, Number(state.settings.syncTickMs) || 800));
   const maxTicks = Math.floor((minutes * 60_000) / (tickMs + 320));
 
-  let tab;
+  // Reuse a tab that is already showing the page we need instead of opening a
+  // second copy. The tab is reloaded first: rows rendered before the scan are
+  // stale, and trusting them would hide people who have since unfollowed.
+  let tab = null;
+  let reused = false;
+  let reloadAt = 0;
   try {
-    tab = await chrome.tabs.create({ url, active: true });
-  } catch (error) {
-    console.warn('[X Monitor] cannot open sync tab', error);
-    return { ok: false, error: 'TAB_FAILED' };
+    const tabs = await chrome.tabs.query({ url: ['https://x.com/*', 'https://twitter.com/*'] });
+    const matching = tabs.filter((candidate) => candidate.id && candidate.url && samePage(candidate.url, url));
+    if (matching.length) {
+      matching.sort((a, b) => Number(Boolean(b.active)) - Number(Boolean(a.active)) || (b.lastAccessed || 0) - (a.lastAccessed || 0));
+      tab = matching[0];
+      reused = true;
+      await chrome.tabs.update(tab.id, { active: true });
+      reloadAt = Date.now();
+      await chrome.tabs.reload(tab.id);
+    }
+  } catch {
+    // Fall through to opening a tab.
   }
-  if (tab.windowId != null) {
-    chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+
+  if (!tab) {
+    try {
+      tab = await chrome.tabs.create({ url, active: true });
+    } catch (error) {
+      console.warn('[X Monitor] cannot open sync tab', error);
+      return { ok: false, error: 'TAB_FAILED' };
+    }
+    if (tab.windowId != null) {
+      chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+    }
   }
 
   sync = {
@@ -615,9 +666,11 @@ async function runSync(kind) {
     accountKey: key,
     url,
     tabId: tab.id,
-    createdTab: true,
+    createdTab: !reused,
     startedAt: Date.now(),
+    reloadAt,
     seenIds: new Set(),
+    seedHandles: new Set(),
     pages: 0,
     captured: 0,
     ticks: 0,
@@ -630,7 +683,7 @@ async function runSync(kind) {
   };
   broadcastSync(true);
 
-  const ready = await waitForContent(tab.id, 25_000);
+  const ready = await waitForContent(tab.id, 25_000, reloadAt);
   if (!sync || sync.tabId !== tab.id) return { ok: false, error: 'CANCELLED' };
   if (!ready) {
     await finishSync({ endReached: false, reason: 'page_not_ready' });
@@ -683,7 +736,10 @@ async function finishSync({ endReached, reason }) {
       .catch(() => {});
   }
 
-  const captured = current.seenIds.size;
+  const captured = Math.max(
+    current.seenIds.size,
+    [...current.seedHandles].length,
+  );
   const finalize = await mutate(
     (state) => {
       const acct = state.accounts[current.accountKey];
@@ -706,10 +762,13 @@ async function finishSync({ endReached, reason }) {
         const map = acct.people[kind];
         const baselineKey = isFollowers ? 'followersBaselineAt' : 'followingBaselineAt';
         const hadBaseline = Boolean(acct.flags[baselineKey]);
+        const seenByHandle = (person) => current.seedHandles.has(String(person.handle || '').toLowerCase());
         const missing = Object.keys(map).filter((id) => {
           const person = map[id];
           if (!person) return false;
           if (current.seenIds.has(id)) return false;
+          // Rows the reused tab had already rendered count as seen.
+          if (seenByHandle(person)) return false;
           // Anything captured after the scan started may come from another
           // tab the user is browsing, so never treat those as gone.
           return (person.lastSeen || 0) <= current.startedAt;
@@ -719,6 +778,20 @@ async function finishSync({ endReached, reason }) {
         const suspicious = safeEnd
           && hadBaseline
           && missing.length > Math.max(25, Math.round(Object.keys(map).length * suspiciousRatio));
+        // A baseline is not "everyone just followed you": on the first complete
+        // scan the whole list is new by definition.
+        const isBaseline = !hadBaseline && safeEnd && !suspicious;
+
+        // Snapshot before the diff is applied: afterwards these people are
+        // gone from the map, but the version history still has to name them.
+        const missingDetail = missing.map((id) => slimPerson(map[id] || { id }));
+        const addedDetail = [];
+        if (!isBaseline) {
+          for (const id of current.seenIds) {
+            const person = map[id];
+            if (person && (person.firstSeen || 0) >= current.startedAt) addedDetail.push(slimPerson(person));
+          }
+        }
 
         if (safeEnd && !suspicious) {
           if (hadBaseline) {
@@ -731,16 +804,44 @@ async function finishSync({ endReached, reason }) {
         }
 
         const complete = safeEnd && !suspicious;
+        const total = Object.keys(map).length;
+        const lastReason = capturedNothing ? 'empty_scan' : suspicious ? 'partial' : reason;
         acct.sync[kind] = {
           lastAt: now,
           lastCompleteAt: complete ? now : (acct.sync[kind]?.lastCompleteAt || null),
           complete,
-          count: Object.keys(map).length,
-          lastReason: capturedNothing ? 'empty_scan' : suspicious ? 'partial' : reason,
+          count: total,
+          lastReason,
           lastCaptured: captured,
         };
         acct.updatedAt = now;
-        return { ok: true, total: Object.keys(map).length, expected, complete };
+
+        // Every scan becomes a version, complete or not. A partial scan still
+        // says something useful ("I saw 19 of the 20 from last time"), which is
+        // far better than staying silent until a perfect run happens.
+        const version = {
+          id: `v${now.toString(36)}`,
+          n: (acct.versionSeq = (acct.versionSeq || 0) + 1),
+          kind,
+          at: now,
+          reason: lastReason,
+          complete,
+          applied: safeEnd && !suspicious,
+          baseline: isBaseline,
+          seen: captured,
+          total,
+          expected,
+          addedCount: addedDetail.length,
+          missingCount: missingDetail.length,
+          added: addedDetail.slice(0, LIMITS.versionRoster),
+          missing: missingDetail.slice(0, LIMITS.versionRoster),
+        };
+        acct.versions.push(version);
+        if (acct.versions.length > LIMITS.versions) {
+          acct.versions.splice(0, acct.versions.length - LIMITS.versions);
+        }
+
+        return { ok: true, total, expected, complete, version };
       }
 
       if (current.kind === 'tweets') {
@@ -778,10 +879,14 @@ async function finishSync({ endReached, reason }) {
     handle: current.handle,
     captured,
     complete: Boolean(finalize?.complete),
-    reason,
+    reason: finalize?.version?.reason || reason,
     at: Date.now(),
     total: finalize?.total ?? 0,
     expected: finalize?.expected ?? null,
+    addedCount: finalize?.version?.addedCount ?? 0,
+    missingCount: finalize?.version?.missingCount ?? 0,
+    applied: Boolean(finalize?.version?.applied),
+    reusedTab: !current.createdTab,
   };
 
   sync = null;
@@ -1044,6 +1149,18 @@ chrome.runtime.onConnect.addListener((port) => {
     if (message?.type === 'hello') {
       sync.status = 'running';
       sync.contentHidden = Boolean(message.hidden);
+      broadcastSync(true);
+    } else if (message?.type === 'seed') {
+      // Rows the reused tab had already rendered before the scan started.
+      // Seeds from the pre-reload document are worthless: they describe a page
+      // that no longer exists and would hide real unfollows.
+      const docStartedAt = Number(message.docStartedAt || 0);
+      const stale = sync.reloadAt && docStartedAt && docStartedAt < sync.reloadAt;
+      const handles = stale || !Array.isArray(message.handles) ? [] : message.handles;
+      for (const handle of handles) {
+        if (typeof handle === 'string' && handle) sync.seedHandles.add(handle.toLowerCase());
+      }
+      sync.captured = Math.max(sync.captured, sync.seedHandles.size);
       broadcastSync(true);
     } else if (message?.type === 'progress') {
       sync.ticks = Number(message.ticks) || sync.ticks;

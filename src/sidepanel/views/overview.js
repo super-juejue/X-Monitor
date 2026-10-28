@@ -17,6 +17,7 @@ export function overviewView(ctx) {
   if (!dash.hasAccount) return onboardingView(ctx);
   return `<div class="stack">
     ${heroCard(ctx)}
+    ${changeCard(ctx)}
     ${todayTiles(ctx)}
     ${chartCard(ctx)}
     ${miniStats(ctx)}
@@ -87,6 +88,60 @@ function heroCard(ctx) {
   </article>`;
 }
 
+/**
+ * The answer to "who unfollowed me", directly on the overview. If the newest
+ * version is a usable one, its missing list is the unfollow answer; otherwise
+ * we say plainly that this run did not decide it.
+ */
+function changeCard(ctx) {
+  const dash = ctx.dash;
+  const latest = dash.lastVersion;
+  if (!latest) return '';
+
+  const isFollower = latest.kind === 'followers';
+  const kindLabel = isFollower ? '粉丝' : '关注';
+  const lost = latest.missingCount || 0;
+  const gained = latest.addedCount || 0;
+  const decided = latest.applied;
+  // "0 取关了你" reads like a glitch, so a zero gets its own wording.
+  const lostText = !decided
+    ? '未判定取关'
+    : lost
+      ? `${formatInt(lost)} ${isFollower ? '取关了你' : '你已取关'}`
+      : '无人取关';
+
+  if (!lost && !gained && decided && !latest.baseline) return '';
+
+  const shown = (latest.missing || []).slice(0, 3);
+  return `<article class="card change-card">
+    <header class="card-head">
+      <div>
+        <h2>第 ${formatInt(latest.n)} 版对比</h2>
+        <p class="card-sub">${kindLabel} · ${relativeTime(latest.at, ctx.now)}${latest.baseline ? ' · 基线版本' : ''}</p>
+      </div>
+      <button class="text-btn" data-action="tab" data-tab="history">${icon('chevron-right', 12)} 全部</button>
+    </header>
+    <div class="change-row">
+      <span class="change-pill ${lost ? (decided ? 'neg' : 'muted') : 'flat'}">
+        ${icon(isFollower ? 'user-minus' : 'users', 11)} ${esc(lostText)}
+      </span>
+      <span class="change-pill ${gained ? 'pos' : 'flat'}">
+        ${icon('user-plus', 11)} ${gained ? `${formatInt(gained)} 新关注` : '暂无新增'}
+      </span>
+    </div>
+    ${shown.length
+      ? `<ul class="change-people">${shown.map((person) => `<li>
+          ${avatar(person, 24)}
+          <span>${esc(person.name || person.handle || '未知账号')}</span>
+          <span class="cp-handle">@${esc(person.handle || '')}</span>
+        </li>`).join('')}</ul>`
+      : ''}
+    ${!decided
+      ? `<p class="change-note">${icon('alert', 11)} 本次${kindLabel}同步未完整，只记录看到了谁，暂不判定取关。</p>`
+      : ''}
+  </article>`;
+}
+
 function todayTiles(ctx) {
   const today = ctx.dash.today;
   const net = typeof today.net === 'number'
@@ -98,7 +153,7 @@ function todayTiles(ctx) {
       value: today.follow,
       iconName: 'user-plus',
       tone: 'pos',
-      sub: '今日同步结果',
+      sub: '今日累计',
       key: 'today.follow',
     })}
     ${tile({
@@ -106,7 +161,7 @@ function todayTiles(ctx) {
       value: today.unfollow,
       iconName: 'user-minus',
       tone: 'neg',
-      sub: '今日同步结果',
+      sub: '今日累计',
       key: 'today.unfollow',
     })}
     ${tile({
@@ -135,12 +190,14 @@ function tile({ label, value, iconName, tone, sub, key, signed = false }) {
   const attrs = hasValue
     ? ` data-count="${value}" data-count-key="${key}"${signed ? ' data-count-format="signed"' : ''}`
     : '';
+  // Only a real change gets a colour; "0" stays neutral.
+  const valueTone = !hasValue || value === 0 ? 'flat' : tone;
   return `<div class="tile">
     <div class="tile-top">
       <span class="tile-icon ${tone}">${icon(iconName, 12)}</span>
       <span>${esc(label)}</span>
     </div>
-    <div class="tile-value"${attrs}>${display}</div>
+    <div class="tile-value ${valueTone}"${attrs}>${display}</div>
     <div class="tile-sub">${esc(sub)}</div>
   </div>`;
 }

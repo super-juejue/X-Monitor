@@ -3,12 +3,14 @@ import { computeDashboard } from '../lib/stats.js';
 import { formatInt, relativeTime } from '../lib/time.js';
 import { animateNumbers, esc, icon, logoMark, showToast } from './ui.js';
 import { overviewView } from './views/overview.js';
+import { historyView } from './views/history.js';
 import { peopleView } from './views/people.js';
 import { tweetsView } from './views/tweets.js';
 import { settingsView } from './views/settings.js';
 
 const VIEWS = {
   overview: overviewView,
+  history: historyView,
   people: peopleView,
   tweets: tweetsView,
   settings: settingsView,
@@ -16,6 +18,7 @@ const VIEWS = {
 
 const TABS = [
   { id: 'overview', label: '概览' },
+  { id: 'history', label: '变动' },
   { id: 'people', label: '粉丝' },
   { id: 'tweets', label: '帖子' },
   { id: 'settings', label: '设置' },
@@ -68,7 +71,7 @@ async function init() {
   els.syncbar = document.getElementById('syncbar');
   ui.ready = true;
 
-  new ResizeObserver(() => positionIndicator()).observe(els.tabs);
+  new ResizeObserver(() => positionIndicator({ snap: true })).observe(els.tabs);
   positionIndicator();
   render();
   bindChrome();
@@ -246,13 +249,27 @@ function renderTabs() {
   requestAnimationFrame(positionIndicator);
 }
 
-function positionIndicator() {
+function positionIndicator({ snap = false } = {}) {
   if (!els.tabs) return;
   const active = els.tabs.querySelector('.tab.active');
   const indicator = els.tabs.querySelector('.tab-indicator');
   if (!active || !indicator) return;
-  indicator.style.width = `${active.offsetWidth}px`;
-  indicator.style.transform = `translateX(${active.offsetLeft}px)`;
+  const width = `${active.offsetWidth}px`;
+  const transform = `translateX(${active.offsetLeft}px)`;
+  if (indicator.style.width === width && indicator.style.transform === transform) return;
+  if (snap) {
+    // A resize re-lays out the tabs, and the offset read during that frame can
+    // still be stale. Animating from it makes the highlight slide across from
+    // the wrong tab, so place it instantly instead.
+    indicator.style.transition = 'none';
+    indicator.style.width = width;
+    indicator.style.transform = transform;
+    void indicator.offsetWidth;
+    indicator.style.transition = '';
+    return;
+  }
+  indicator.style.width = width;
+  indicator.style.transform = transform;
 }
 
 function renderTopbar() {
@@ -332,7 +349,7 @@ function sheetHtml() {
           <h2>正在同步${SYNC_LABELS[running.kind] || ''}</h2>
           <span class="live-pill is-live"><i></i>进行中</span>
         </div>
-        <p>已打开 X 页面并开始自动滚动。请保持该标签页在前台，完成后会自动关闭。</p>
+        <p>已刷新你的 X 页面并开始自动滚动。请保持该标签页在前台，抓完就会自己停。</p>
         <div class="progress">
           <div class="progress-track"><div class="progress-fill"></div></div>
           <div class="progress-stats">
@@ -353,7 +370,7 @@ function sheetHtml() {
     <div class="sheet" role="dialog" aria-modal="true" aria-label="同步数据">
       <div class="sheet-grab"></div>
       <h2>同步数据</h2>
-      <p>同步会在新标签页打开你的 X 页面并自动滚动。粉丝/关注列表完整同步一次后，才能准确识别取关。</p>
+      <p>同步会复用你已经打开的 X 页面（没有才新开一个），刷新后自动滚到底部，把这次的名单存成一个新版本，和上一版对比出谁取关了你。</p>
       ${result}
       ${syncOption('followers', 'user-plus', '粉丝列表', '新增关注、取关，并建立粉丝基线')}
       ${syncOption('following', 'users', '关注列表', '你关注了谁、最近取关了谁')}
@@ -425,7 +442,11 @@ function notifySyncResult(result) {
     return;
   }
   if (result.complete) {
-    showToast(`${label}同步完成${result.total ? ` · ${formatInt(result.total)} 条` : ''}`, 'success');
+    const parts = [`${label}同步完成`];
+    if (result.addedCount) parts.push(`新增 ${formatInt(result.addedCount)}`);
+    if (result.missingCount) parts.push(`减少 ${formatInt(result.missingCount)}`);
+    if (!result.addedCount && !result.missingCount && result.total) parts.push(`${formatInt(result.total)} 条`);
+    showToast(parts.join(' · '), 'success', 4200);
     return;
   }
   const reasons = {
@@ -438,7 +459,9 @@ function notifySyncResult(result) {
     disconnected: '同步连接中断，已保存部分数据',
     timeout: '同步超时，已保存部分数据',
   };
-  showToast(reasons[result.reason] || '同步未完成，已保存已抓取的数据', 'warning', 4500);
+  const base = reasons[result.reason] || '同步未完成，已保存已抓取的数据';
+  const detail = result.missingCount ? ` · 本次有 ${formatInt(result.missingCount)} 位暂未出现` : '';
+  showToast(`${base}${detail}`, 'warning', 5200);
 }
 
 // ---------------------------------------------------------------------------

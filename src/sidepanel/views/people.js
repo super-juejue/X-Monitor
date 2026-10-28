@@ -38,12 +38,20 @@ export function peopleView(ctx) {
   const incomplete = syncInfo && syncInfo.complete === false;
   const expected = syncKind === 'following' ? dash.current?.following : dash.current?.followers;
 
+  // "0 个关注" reads like the account follows nobody; say the list is just not
+  // synced yet when the profile says otherwise.
+  const followingText = counts.following
+    ? `${formatBig(counts.following)} 个关注`
+    : dash.current?.following
+      ? '关注名单未同步'
+      : '0 个关注';
+
   return `<div class="stack">
     <div class="view-head">
       <div>
         <h1 class="view-title">粉丝与关注</h1>
         <p class="view-sub">
-          追踪 ${formatBig(counts.followers)} 位粉丝 · ${formatBig(counts.following)} 个关注
+          追踪 ${formatBig(counts.followers)} 位粉丝 · ${followingText}
           ${lastSync ? ` · 最近同步 ${relativeTime(lastSync, ctx.now)}` : ''}
         </p>
       </div>

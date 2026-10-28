@@ -41,6 +41,11 @@ html[data-theme="light"] {
   --text: #111625;
   --text-2: #4d566b;
   --text-3: #7b8498;
+  /* The dark-theme green/pink are far too light on white; these keep the same
+     meaning with enough contrast to read as numbers. */
+  --pos: #059669;
+  --neg: #e11d48;
+  --warn: #b45309;
   --shadow-card: 0 1px 0 #ffffff inset, 0 18px 40px -34px rgba(15, 23, 42, 0.45);
   --shadow-float: 0 24px 60px -28px rgba(15, 23, 42, 0.35);
   color-scheme: light;
@@ -370,14 +375,15 @@ html[data-theme="light"] .aurora::after {
   z-index: 1;
   border: 0;
   background: none;
-  padding: 8px 4px;
-  font-size: 11.5px;
+  padding: 8px 2px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-3);
   border-radius: 10px;
   cursor: pointer;
   transition: color 0.25s;
   letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 
 .tab:hover {
@@ -921,6 +927,21 @@ html[data-theme="light"] .delta.flat {
   letter-spacing: -0.025em;
   font-variant-numeric: tabular-nums;
   line-height: 1.05;
+  color: var(--text);
+}
+
+/* A zero is neutral: colouring it green or pink makes "no change" look like
+   an event. */
+.tile-value.pos {
+  color: var(--pos);
+}
+
+.tile-value.neg {
+  color: var(--neg);
+}
+
+.tile-value.flat {
+  color: var(--text);
 }
 
 .tile-sub {
@@ -2783,6 +2804,362 @@ html[data-theme="light"] .splash-line {
   .hero-metric {
     margin-top: 20px;
   }
+}
+
+/* ==========================================================================
+   Version history
+   ========================================================================== */
+
+.compare-card {
+  background:
+    radial-gradient(130% 120% at 100% 0%, rgba(139, 92, 246, 0.18), transparent 55%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+}
+
+html[data-theme="light"] .compare-card {
+  background:
+    radial-gradient(130% 120% at 100% 0%, rgba(139, 92, 246, 0.12), transparent 55%),
+    linear-gradient(180deg, #ffffff, #fbfbff);
+}
+
+.compare-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+  margin-top: 4px;
+}
+
+.compare-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 10px 12px;
+  border-radius: 13px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+/* Both cells keep the same footprint whatever the number; only a non-zero
+   value gets its semantic colour, so "0" never looks like an alarm. */
+.compare-cell.pos {
+  border-color: rgba(52, 211, 153, 0.24);
+  background: rgba(52, 211, 153, 0.06);
+}
+
+.compare-cell.neg {
+  border-color: rgba(251, 113, 133, 0.26);
+  background: rgba(251, 113, 133, 0.07);
+}
+
+.compare-cell .compare-num {
+  font-size: 25px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.compare-cell.pos .compare-num {
+  color: var(--pos);
+}
+
+.compare-cell.neg .compare-num {
+  color: var(--neg);
+}
+
+/* A zero or an undecided run should not shout in red. */
+.compare-cell.flat .compare-num,
+.compare-cell.muted .compare-num {
+  color: var(--text-3);
+}
+
+.compare-label {
+  font-size: 9.5px;
+  color: var(--text-3);
+}
+
+.compare-flat {
+  margin: 10px 0 0;
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.compare-card .callout {
+  margin-top: 10px;
+}
+
+.change-card {
+  background:
+    radial-gradient(120% 110% at 0% 0%, rgba(34, 211, 238, 0.1), transparent 58%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.02));
+}
+
+html[data-theme="light"] .change-card {
+  background:
+    radial-gradient(120% 110% at 0% 0%, rgba(34, 211, 238, 0.11), transparent 58%),
+    linear-gradient(180deg, #ffffff, #fbfbff);
+}
+
+.change-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.change-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.change-pill.neg {
+  color: var(--neg);
+  border-color: rgba(251, 113, 133, 0.28);
+  background: rgba(251, 113, 133, 0.08);
+}
+
+.change-pill.pos {
+  color: var(--pos);
+  border-color: rgba(52, 211, 153, 0.26);
+  background: rgba(52, 211, 153, 0.07);
+}
+
+.change-pill.muted {
+  color: var(--text-3);
+}
+
+.change-pill.flat {
+  color: var(--text-3);
+}
+
+.change-people {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.change-people li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  min-width: 0;
+}
+
+.change-people li > span:first-of-type {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cp-handle {
+  margin-left: auto;
+  font-size: 9.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.change-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  margin: 10px 0 0;
+  font-size: 9.5px;
+  line-height: 1.5;
+  color: var(--warn);
+}
+
+.change-note .icon {
+  margin-top: 1px;
+  flex: none;
+}
+
+.version-card {
+  padding: 13px 14px;
+}
+
+.version-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.version-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.version-title strong {
+  font-size: 12.5px;
+  letter-spacing: -0.01em;
+}
+
+.version-title span {
+  font-size: 9.5px;
+  color: var(--text-3);
+}
+
+.version-badge {
+  margin-left: auto;
+  flex: none;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.version-badge.complete {
+  color: var(--pos);
+  background: rgba(52, 211, 153, 0.1);
+  border-color: rgba(52, 211, 153, 0.28);
+}
+
+.version-badge.baseline {
+  color: var(--accent-2);
+  background: rgba(34, 211, 238, 0.1);
+  border-color: rgba(34, 211, 238, 0.28);
+}
+
+.version-badge.partial {
+  color: var(--warn);
+  background: rgba(251, 191, 36, 0.1);
+  border-color: rgba(251, 191, 36, 0.26);
+}
+
+.version-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin-top: 7px;
+  font-size: 9.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.version-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.version-meta .pos {
+  color: var(--pos);
+  font-weight: 600;
+}
+
+.version-meta .neg {
+  color: var(--neg);
+  font-weight: 600;
+}
+
+.version-meta .muted {
+  opacity: 0.75;
+}
+
+.version-people {
+  margin-top: 9px;
+  padding: 8px 10px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+}
+
+html[data-theme="light"] .version-people {
+  background: rgba(15, 23, 42, 0.025);
+}
+
+.version-people.added {
+  border-color: rgba(52, 211, 153, 0.22);
+}
+
+.version-people.lost {
+  border-color: rgba(251, 113, 133, 0.24);
+}
+
+.version-people-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.version-people.added .version-people-head strong {
+  color: var(--pos);
+}
+
+.version-people.lost .version-people-head strong {
+  color: var(--neg);
+}
+
+.version-people ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.version-people li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  min-width: 0;
+}
+
+.vp-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.vp-handle {
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-left: auto;
+  font-size: 9.5px;
+}
+
+.vp-more {
+  color: var(--text-3);
+  font-size: 9.5px;
+  padding-left: 28px;
+}
+
+.version-note {
+  margin: 8px 0 0;
+  font-size: 9.5px;
+  line-height: 1.55;
+  color: var(--warn);
+  opacity: 0.9;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -222,6 +222,9 @@ export function computeDashboard(state, now = Date.now()) {
     activity: activity.slice(0, 30),
     sync: acct.sync || {},
     flags: acct.flags || {},
+    // Newest first: the side panel walks this list top-down.
+    versions: (acct.versions || []).slice().reverse(),
+    lastVersion: (acct.versions || [])[(acct.versions || []).length - 1] || null,
     totals: {
       followers: num(latest, 'followers'),
       following: num(latest, 'following'),

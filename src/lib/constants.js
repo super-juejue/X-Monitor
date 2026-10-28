@@ -41,6 +41,8 @@ export const LIMITS = {
   exPeople: 10000,
   historyDays: 400,
   accounts: 6,
+  versions: 40,
+  versionRoster: 200,
 };
 
 export function accountKey(handle) {
@@ -70,6 +72,8 @@ export function createAccount(handle, now = Date.now()) {
     daily: {},
     flags: { followersBaselineAt: null, followingBaselineAt: null },
     sync: { followers: null, following: null, tweets: null },
+    versions: [],
+    versionSeq: 0,
     createdAt: now,
     updatedAt: now,
   };
@@ -112,6 +116,8 @@ function hydrateAccount(raw, key) {
     daily: raw?.daily && typeof raw.daily === 'object' ? raw.daily : {},
     flags: { ...base.flags, ...(raw?.flags || {}) },
     sync: { ...base.sync, ...(raw?.sync || {}) },
+    versions: Array.isArray(raw?.versions) ? raw.versions.filter((v) => v && typeof v === 'object') : [],
+    versionSeq: Number(raw?.versionSeq) || 0,
   };
 }
 

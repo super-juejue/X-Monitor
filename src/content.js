@@ -12,6 +12,13 @@
   const host = location.hostname.replace(/^www\./, '');
   if (host !== 'x.com' && host !== 'twitter.com') return;
 
+  /**
+   * When this document was created (epoch ms). The worker uses it to tell the
+   * reloaded page apart from the stale one it replaced: a scan must never
+   * inherit the old page's rows.
+   */
+  const docStartedAt = () => Math.round(performance.timeOrigin || Date.now());
+
   const send = (message) => {
     try {
       const result = chrome.runtime.sendMessage(message);
@@ -119,7 +126,7 @@
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!message || typeof message.type !== 'string') return undefined;
     if (message.type === 'PING') {
-      sendResponse({ ok: true, href: location.href, path: pathOf(location.href) });
+      sendResponse({ ok: true, href: location.href, path: pathOf(location.href), docStartedAt: docStartedAt() });
       return undefined;
     }
     if (message.type === 'SYNC_START') {
@@ -149,6 +156,20 @@
     return /\/i\/flow\/login|\/i\/flow\/signup|\/login/.test(location.pathname);
   }
 
+  function collectVisibleHandles() {
+    const handles = new Set();
+    for (const cell of document.querySelectorAll('[data-testid="UserCell"]')) {
+      for (const link of cell.querySelectorAll('a[href^="/"]')) {
+        const match = (link.getAttribute('href') || '').match(/^\/([A-Za-z0-9_]{1,15})\/?$/);
+        if (match) {
+          handles.add(match[1].toLowerCase());
+          break;
+        }
+      }
+    }
+    return [...handles];
+  }
+
   function startScroll(options) {
     if (scrollSession) {
       if (scrollSession.sessionId === options.sessionId) return;
@@ -166,6 +187,7 @@
       hiddenTicks: 0,
       lastHeight: 0,
       lastTop: 0,
+      seeded: false,
       timer: null,
       finished: false,
     };
@@ -189,8 +211,31 @@
       syncPort = null;
     }
 
+    seedVisibleRows(session);
     postProgress(session);
     session.timer = setTimeout(() => tickScroll(session), 500);
+  }
+
+  /**
+   * A reused tab has already loaded rows before the sync started. Those people
+   * were captured earlier, so the worker does not know this scan saw them; tell
+   * it explicitly or they look like fresh unfollows.
+   */
+  function seedVisibleRows(session) {
+    if (!syncPort || !session || session.seeded) return;
+    const handles = collectVisibleHandles();
+    session.seeded = true;
+    if (!handles.length) return;
+    try {
+      syncPort.postMessage({
+        type: 'seed',
+        sessionId: session.sessionId,
+        docStartedAt: docStartedAt(),
+        handles,
+      });
+    } catch {
+      // ignore
+    }
   }
 
   function postProgress(session) {
