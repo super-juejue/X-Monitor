@@ -1,17 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "X Monitor — X 数据看板",
-  "short_name": "X Monitor",
-  "version": "1.0.0",
-  "description": "在侧边栏查看 X（Twitter）粉丝增长、取关、帖子互动等数据。无需 API Key，所有数据仅保存在本地。",
+  "name": "X Monitor",
+  "version": "0.1.0",
+  "description": "在侧边栏显示当前登录的 X 账号信息。只读、本地保存、无需 API Key。",
   "minimum_chrome_version": "116",
   "permissions": [
     "storage",
-    "unlimitedStorage",
-    "sidePanel",
-    "tabs",
-    "notifications",
-    "alarms"
+    "sidePanel"
   ],
   "host_permissions": [
     "https://x.com/*",

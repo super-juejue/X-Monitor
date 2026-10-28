@@ -1,738 +1,212 @@
-import { STORAGE_KEY, SYNC_LABELS, hydrateState } from '../lib/constants.js';
-import { computeDashboard } from '../lib/stats.js';
-import { formatInt, relativeTime } from '../lib/time.js';
-import { animateNumbers, esc, icon, logoMark, showToast } from './ui.js';
-import { overviewView } from './views/overview.js';
-import { historyView } from './views/history.js';
-import { peopleView } from './views/people.js';
-import { tweetsView } from './views/tweets.js';
-import { settingsView } from './views/settings.js';
+/**
+ * Side panel.
+ *
+ * One card: who you are on X, and your current numbers. Everything is read from
+ * the worker, which gets it from X's own responses — the panel never fetches.
+ */
 
-const VIEWS = {
-  overview: overviewView,
-  history: historyView,
-  people: peopleView,
-  tweets: tweetsView,
-  settings: settingsView,
+import { formatBig, relativeTime } from '../lib/time.js';
+
+const app = document.getElementById('app');
+
+const ICONS = {
+  logo: `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path d="M3.5 15.5 8 9.5l3.4 3.9L16 5.5l4.5 5" stroke="white" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="20.5" cy="16.5" r="2" fill="white" fill-opacity=".9"/>
+  </svg>`,
+  external: `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path d="M14 4h6v6M20 4l-8.5 8.5M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`,
+  verified: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="#1d9bf0" d="M12 1.6l2.6 2.1 3.3-.5 1.2 3.1 2.9 1.7-1 3.2 1 3.2-2.9 1.7-1.2 3.1-3.3-.5L12 22.4l-2.6-2.1-3.3.5-1.2-3.1-2.9-1.7 1-3.2-1-3.2 2.9-1.7 1.2-3.1 3.3.5z"/>
+    <path fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" d="M8.2 12.2l2.5 2.5 5-5.2"/>
+  </svg>`,
 };
 
-const TABS = [
-  { id: 'overview', label: '概览' },
-  { id: 'history', label: '变动' },
-  { id: 'people', label: '粉丝' },
-  { id: 'tweets', label: '帖子' },
-  { id: 'settings', label: '设置' },
+const STATS = [
+  { key: 'followers', label: '粉丝' },
+  { key: 'following', label: '关注' },
+  { key: 'tweets', label: '帖子' },
 ];
 
-const ui = {
-  state: hydrateState(null),
-  dash: computeDashboard(hydrateState(null)),
-  tab: 'overview',
-  lastRenderedTab: null,
-  lastPeopleFilter: null,
-  chartMode: 'followers',
-  peopleFilter: 'followers',
-  query: '',
-  peopleLimit: 200,
-  tweetLimit: 60,
-  sync: null,
-  lastSync: null,
-  numbers: {},
-  forceAnimate: false,
-  forceScrollTop: null,
-  sheet: false,
-  confirm: null,
-  xTabCount: 0,
-  reduced: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
-  ready: false,
-};
+/** Values already shown, so a refresh counts up from them instead of zero. */
+const numbers = {};
+let account = null;
+let signature = '';
+/** Entry animations belong to the first paint only, not to every refresh. */
+let mounted = false;
 
-const els = {};
-let renderTimer = null;
-let lastStatusUpdate = 0;
+const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+}[ch]));
 
-init();
-
-async function init() {
-  bindGlobal();
-  try {
-    await loadState();
-  } catch (error) {
-    console.warn('[X Monitor] failed to load state', error);
-  }
-  await refreshXTabs();
-  applyTheme(resolveTheme());
-  els.app = document.getElementById('app');
-  els.app.innerHTML = shellHtml();
-  els.view = document.getElementById('view');
-  els.overlay = document.getElementById('sheet-root');
-  els.tabs = document.getElementById('tabs');
-  els.statusbar = document.getElementById('statusbar');
-  els.syncbar = document.getElementById('syncbar');
-  ui.ready = true;
-
-  new ResizeObserver(() => positionIndicator({ snap: true })).observe(els.tabs);
-  positionIndicator();
-  render();
-  bindChrome();
-  fetchSyncStatus();
-  setInterval(() => {
-    if (ui.tab === 'overview' || ui.tab === 'people') scheduleRender(0);
-  }, 60_000);
-  setInterval(refreshXTabs, 30_000);
+/** X serves 48px avatars by default; ask for the big one. */
+function largeAvatar(url) {
+  return typeof url === 'string' ? url.replace(/_normal(\.[a-z]+)$/i, '_400x400$1') : '';
 }
 
-function bindGlobal() {
-  document.addEventListener('click', onClick);
-  document.addEventListener('change', onChange);
-  document.addEventListener('input', onInput);
-  document.addEventListener(
-    'error',
-    (event) => {
-      if (event.target instanceof HTMLImageElement) event.target.classList.add('is-broken');
-    },
-    true,
-  );
-  const media = window.matchMedia('(prefers-reduced-motion: reduce)');
-  media.addEventListener?.('change', (event) => {
-    ui.reduced = event.matches;
-  });
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => {
-    if ((ui.state.settings.theme || 'system') === 'system') {
-      applyTheme(resolveTheme());
-    }
-  });
-}
-
-async function loadState() {
-  const stored = await chrome.storage.local.get(STORAGE_KEY);
-  applyRawState(stored?.[STORAGE_KEY]);
-}
-
-function applyRawState(raw) {
-  ui.state = hydrateState(raw);
-  ui.dash = computeDashboard(ui.state);
-}
-
-function bindChrome() {
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'local' || !changes[STORAGE_KEY]) return;
-    const previousTheme = ui.state.settings.theme;
-    applyRawState(changes[STORAGE_KEY].newValue);
-    if (ui.state.settings.theme !== previousTheme) applyTheme(resolveTheme());
-    scheduleRender(ui.sync?.running ? 600 : 140);
-  });
-
-  chrome.runtime.onMessage.addListener((message) => {
-    if (!message || message.type !== 'SYNC_STATUS') return;
-    const wasRunning = Boolean(ui.sync?.running);
-    ui.sync = message.status || null;
-    ui.lastSync = message.lastSync || ui.lastSync;
-    renderSyncChrome();
-    if (wasRunning && !ui.sync) {
-      notifySyncResult(ui.lastSync);
-      scheduleRender(0);
-    } else if (ui.sync) {
-      const now = Date.now();
-      if (now - lastStatusUpdate > 900) {
-        lastStatusUpdate = now;
-        scheduleRender(250);
-      }
-    }
-  });
-}
-
-async function fetchSyncStatus() {
-  try {
-    const result = await chrome.runtime.sendMessage({ type: 'GET_SYNC_STATUS' });
-    ui.sync = result?.status || null;
-    ui.lastSync = result?.lastSync || ui.lastSync;
-    renderSyncChrome();
-  } catch {
-    // Background unavailable; keep idle state.
-  }
-}
-
-async function refreshXTabs() {
-  let count = ui.xTabCount;
-  try {
-    const tabs = await chrome.tabs.query({ url: ['https://x.com/*', 'https://twitter.com/*'] });
-    count = tabs.length;
-  } catch {
-    count = 0;
-  }
-  if (count !== ui.xTabCount) {
-    ui.xTabCount = count;
-    if (ui.tab === 'overview' && !ui.dash.hasAccount) scheduleRender(0);
-  }
-}
-
-function shellHtml() {
-  return `<div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
-  <div class="shell">
-    <header class="topbar">
-      <div class="brand">
-        <div class="logo">${logoMark(21)}</div>
-        <div class="brand-text"><strong>X Monitor</strong><span id="brand-sub">X 数据看板</span></div>
-      </div>
-      <div class="top-actions">
-        <button class="icon-btn" id="sync-btn" type="button" data-action="open-sheet" title="同步数据">${icon('refresh', 17)}</button>
-        <button class="icon-btn" id="open-x-btn" type="button" data-action="open-x" title="打开 X">${icon('external', 17)}</button>
-      </div>
-    </header>
-    <nav class="tabs" id="tabs" role="tablist" aria-label="视图">
-      ${TABS.map((tab) => `<button class="tab" type="button" role="tab" data-action="tab" data-tab="${tab.id}">${tab.label}</button>`).join('')}
-      <span class="tab-indicator" aria-hidden="true"></span>
-    </nav>
-    <div id="syncbar"></div>
-    <main class="content" id="view" role="tabpanel"></main>
-    <footer class="statusbar" id="statusbar"></footer>
+function avatarHtml(self) {
+  const name = String(self?.name || self?.handle || '?').trim();
+  const initial = name.charAt(0).toUpperCase() || '?';
+  const src = /^https?:\/\//.test(self?.avatar || '') ? largeAvatar(self.avatar) : '';
+  return `<div class="avatar">
+    <span class="avatar-initial">${esc(initial)}</span>
+    ${src ? `<img src="${esc(src)}" alt="">` : ''}
   </div>`;
+}
+
+function statsHtml(profile) {
+  return `<div class="stats">${STATS.map(({ key, label }) => {
+    const value = profile?.[key];
+    const has = typeof value === 'number' && Number.isFinite(value);
+    return `<div class="stat">
+      <span class="stat-num"${has ? ` data-count="${value}" data-key="${key}"` : ''}>${has ? formatBig(value) : '—'}</span>
+      <span class="stat-label">${label}</span>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function accountView(data) {
+  const self = data.self;
+  const profile = data.profile;
+  const ts = profile?.ts || data.updatedAt || 0;
+  return `<section class="card">
+    <div class="identity">
+      ${avatarHtml(self)}
+      <div class="who">
+        <div class="name-row">
+          <span class="name">${esc(self.name || self.handle)}</span>
+          ${self.verified ? `<span class="verified" title="已验证账号">${ICONS.verified}</span>` : ''}
+        </div>
+        <div class="handle">@${esc(self.handle)}</div>
+      </div>
+    </div>
+    ${statsHtml(profile)}
+    <div class="foot">
+      <span class="dot${profile ? ' live' : ''}"></span>
+      <span class="foot-time">${ts ? `更新于 ${relativeTime(ts)}` : '等待你的主页数据'}</span>
+    </div>
+  </section>`;
+}
+
+function emptyView() {
+  return `<section class="empty">
+    <div class="empty-mark">${ICONS.logo}</div>
+    <h1>还没有读到你的账号</h1>
+    <p>在浏览器里打开并登录 x.com，这里会自动显示你的头像和粉丝数。</p>
+    <button class="btn" type="button" data-action="open-x">
+      ${ICONS.external}<span>打开 x.com</span>
+    </button>
+  </section>`;
+}
+
+function loadingView() {
+  return `<div class="loading" aria-label="正在读取本地数据"><span class="spinner"></span></div>`;
 }
 
 function render() {
-  if (!ui.ready) return;
-  applyTheme(resolveTheme());
-
-  const animate = ui.forceAnimate
-    || ui.tab !== ui.lastRenderedTab
-    || (ui.tab === 'people' && ui.peopleFilter !== ui.lastPeopleFilter);
-  ui.forceAnimate = false;
-
-  const focus = captureFocus();
-  const previousScroll = els.view.scrollTop;
-  const view = VIEWS[ui.tab] || overviewView;
-  const ctx = {
-    dash: ui.dash,
-    ui,
-    animate,
-    now: Date.now(),
-  };
-
-  els.view.innerHTML = view(ctx);
-  els.view.dataset.tab = ui.tab;
-  els.view.setAttribute('aria-label', TABS.find((tab) => tab.id === ui.tab)?.label || '');
-  animateNumbers(els.view, ui);
-  restoreFocus(focus);
-
-  ui.lastRenderedTab = ui.tab;
-  ui.lastPeopleFilter = ui.peopleFilter;
-  renderTabs();
-  renderTopbar();
-  renderStatusbar();
-  renderSyncbar();
-  renderOverlay();
-
-  requestAnimationFrame(() => {
-    if (!els.view) return;
-    els.view.scrollTop = ui.forceScrollTop != null ? ui.forceScrollTop : previousScroll;
-    ui.forceScrollTop = null;
-  });
-}
-
-function scheduleRender(delay = 120) {
-  if (!ui.ready) return;
-  if (renderTimer) return;
-  renderTimer = setTimeout(() => {
-    renderTimer = null;
-    render();
-  }, delay);
-}
-
-function renderTabs() {
-  if (!els.tabs) return;
-  els.tabs.querySelectorAll('.tab').forEach((tab) => {
-    const active = tab.dataset.tab === ui.tab;
-    tab.classList.toggle('active', active);
-    tab.setAttribute('aria-selected', active ? 'true' : 'false');
-  });
-  requestAnimationFrame(positionIndicator);
-}
-
-function positionIndicator({ snap = false } = {}) {
-  if (!els.tabs) return;
-  const active = els.tabs.querySelector('.tab.active');
-  const indicator = els.tabs.querySelector('.tab-indicator');
-  if (!active || !indicator) return;
-  const width = `${active.offsetWidth}px`;
-  const transform = `translateX(${active.offsetLeft}px)`;
-  if (indicator.style.width === width && indicator.style.transform === transform) return;
-  if (snap) {
-    // A resize re-lays out the tabs, and the offset read during that frame can
-    // still be stale. Animating from it makes the highlight slide across from
-    // the wrong tab, so place it instantly instead.
-    indicator.style.transition = 'none';
-    indicator.style.width = width;
-    indicator.style.transform = transform;
-    void indicator.offsetWidth;
-    indicator.style.transition = '';
+  if (!account) {
+    app.innerHTML = loadingView();
     return;
   }
-  indicator.style.width = width;
-  indicator.style.transform = transform;
-}
 
-function renderTopbar() {
-  const self = ui.dash?.self;
-  const sub = document.getElementById('brand-sub');
-  if (sub) {
-    if (self?.handle) {
-      sub.innerHTML = `<span class="brand-dot ${ui.dash.live ? 'on' : ''}"></span>@${esc(self.handle)}`;
-    } else {
-      sub.textContent = 'X 数据看板';
-    }
-  }
-  const syncBtn = document.getElementById('sync-btn');
-  if (syncBtn) {
-    syncBtn.innerHTML = `${icon('refresh', 17)}${ui.sync ? '<i class="ping"></i>' : ''}`;
-    syncBtn.title = ui.sync ? `正在同步${SYNC_LABELS[ui.sync.kind] || ''}…` : '同步数据';
-    syncBtn.classList.toggle('is-active', Boolean(ui.sync));
-  }
-}
-
-function renderStatusbar() {
-  if (!els.statusbar) return;
-  const self = ui.dash?.self;
-  const lastCapture = ui.state.meta?.lastCaptureAt;
-  let label = '等待 X 数据';
-  let on = false;
-  if (ui.sync) {
-    label = `正在同步${SYNC_LABELS[ui.sync.kind] || ''}`;
-    on = true;
-  } else if (lastCapture) {
-    label = `更新于 ${relativeTime(lastCapture)}`;
-    on = Boolean(ui.dash.live);
-  }
-  els.statusbar.innerHTML = `<span class="dot ${on ? 'on' : ''}"></span>
-    <span class="status-text">${esc(label)}</span>
-    <span class="right">${self?.handle ? `@${esc(self.handle)}` : '本地模式'}</span>`;
-}
-
-function renderSyncbar() {
-  if (!els.syncbar) return;
-  if (!ui.sync) {
-    els.syncbar.innerHTML = '';
-    return;
-  }
-  els.syncbar.innerHTML = `<div class="syncbar">
-    <span class="spinner"></span>
-    <span>${esc(syncProgressText(ui.sync))}</span>
-    <button type="button" data-action="cancel-sync">停止</button>
-  </div>`;
-}
-
-function syncProgressText(status) {
-  if (!status) return '';
-  const label = SYNC_LABELS[status.kind] || '数据';
-  if (status.kind === 'tweets') return `正在同步${label} · 已加载 ${formatInt(status.pages || 0)} 页`;
-  return `正在同步${label} · 已捕获 ${formatInt(status.captured || 0)} ${status.kind === 'followers' ? '位' : '个'}`;
-}
-
-function renderOverlay() {
-  if (!els.overlay) return;
-  if (ui.confirm === 'clear') {
-    els.overlay.innerHTML = confirmHtml();
-    return;
-  }
-  els.overlay.innerHTML = ui.sheet ? sheetHtml() : '';
-}
-
-function sheetHtml() {
-  if (ui.sync) {
-    const running = ui.sync;
-    const elapsed = Math.max(0, Math.round((Date.now() - running.startedAt) / 1000));
-    return `<div class="overlay">
-      <div class="overlay-backdrop" data-action="close-sheet"></div>
-      <div class="sheet" role="dialog" aria-modal="true" aria-label="正在同步">
-        <div class="sheet-grab"></div>
-        <div class="sheet-title-row">
-          <h2>正在同步${SYNC_LABELS[running.kind] || ''}</h2>
-          <span class="live-pill is-live"><i></i>进行中</span>
-        </div>
-        <p>已刷新你的 X 页面并开始自动滚动。请保持该标签页在前台，抓完就会自己停。</p>
-        <div class="progress">
-          <div class="progress-track"><div class="progress-fill"></div></div>
-          <div class="progress-stats">
-            <span>${esc(syncProgressText(running))}</span>
-            <span>${formatInt(running.pages || 0)} 页 · ${elapsed}s</span>
-          </div>
-        </div>
-        ${running.hidden ? `<div class="callout warn">${icon('alert', 14)}<span>同步标签页在后台，滚动可能被浏览器暂停。请切换到该标签页。</span></div>` : ''}
-        <button class="btn danger wide" type="button" data-action="cancel-sync">停止同步</button>
-        <p class="sheet-note">停止后会保留已抓取的数据，但不会更新取关判断。</p>
+  app.innerHTML = `
+    <header class="topbar${mounted ? ' instant' : ''}">
+      <div class="brand">
+        <span class="brand-mark">${ICONS.logo}</span>
+        <span class="brand-name">X Monitor</span>
       </div>
-    </div>`;
+      <button class="icon-btn" type="button" data-action="open-x" title="打开 x.com" aria-label="打开 x.com">
+        ${ICONS.external}
+      </button>
+    </header>
+    <main class="content">
+      ${account.self ? accountView(account) : emptyView()}
+    </main>`;
+
+  if (mounted) {
+    for (const el of app.querySelectorAll('.card, .empty, .avatar')) el.classList.add('instant');
+  }
+  mounted = true;
+
+  const img = app.querySelector('.avatar img');
+  if (img) {
+    if (img.complete && img.naturalWidth > 0) img.classList.add('ready');
+    img.addEventListener('load', () => img.classList.add('ready'), { once: true });
+    img.addEventListener('error', () => img.remove(), { once: true });
   }
 
-  const result = ui.lastSync ? lastSyncLine(ui.lastSync) : '';
-  return `<div class="overlay">
-    <div class="overlay-backdrop" data-action="close-sheet"></div>
-    <div class="sheet" role="dialog" aria-modal="true" aria-label="同步数据">
-      <div class="sheet-grab"></div>
-      <h2>同步数据</h2>
-      <p>同步会复用你已经打开的 X 页面（没有才新开一个），刷新后自动滚到底部，把这次的名单存成一个新版本，和上一版对比出谁取关了你。</p>
-      ${result}
-      ${syncOption('followers', 'user-plus', '粉丝列表', '新增关注、取关，并建立粉丝基线')}
-      ${syncOption('following', 'users', '关注列表', '你关注了谁、最近取关了谁')}
-      ${syncOption('tweets', 'chart', '我的帖子', '点赞、转发、回复与阅读数据')}
-      <p class="sheet-note">${icon('shield', 12)} 平时浏览 X 时也会自动记录，无需每次都同步。</p>
-    </div>
-  </div>`;
+  animateNumbers();
 }
 
-function syncOption(kind, iconName, title, description) {
-  return `<button class="sync-option" type="button" data-action="sync" data-kind="${kind}">
-    <span class="sync-option-icon">${icon(iconName, 17)}</span>
-    <span class="sync-option-copy"><strong>${title}</strong><span>${description}</span></span>
-    <span class="sync-option-chev">${icon('chevron-right', 15)}</span>
-  </button>`;
-}
+function animateNumbers() {
+  const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  for (const el of app.querySelectorAll('[data-count]')) {
+    const target = Number(el.dataset.count);
+    if (!Number.isFinite(target)) continue;
+    const key = el.dataset.key || 'count';
+    const from = Number.isFinite(numbers[key])
+      ? numbers[key]
+      : Math.round(target * 0.84);
+    numbers[key] = target;
 
-function lastSyncLine(result) {
-  const label = SYNC_LABELS[result.kind] || '数据';
-  if (result.complete) {
-    return `<div class="result-line ok">${icon('check', 13)} 上次${label}同步完成${result.total ? ` · ${formatInt(result.total)} 条` : ''}</div>`;
-  }
-  const reasons = {
-    cancelled: '上次同步已取消',
-    rate_limited: 'X 限制了请求频率，请稍后再试',
-    login_required: '未检测到已登录的 X 页面',
-    page_not_ready: 'X 页面加载超时',
-    tab_closed: '同步标签页被关闭',
-    navigated: '同步页被跳转，已停止',
-    stalled: '同步提前结束，可能未抓全',
-    partial: '这次抓取的名单明显偏少，已跳过取关判断',
-    empty_scan: '这次同步没有抓到任何名单，已跳过取关判断',
-    max_ticks: '已达到同步时长上限',
-    disconnected: '同步连接中断',
-    timeout: '同步超时',
-  };
-  return `<div class="result-line warn">${icon('alert', 13)} ${esc(reasons[result.reason] || `上次${label}同步未完成`)}</div>`;
-}
+    if (reduced || from === target) {
+      el.textContent = formatBig(target);
+      continue;
+    }
 
-function confirmHtml() {
-  const handle = ui.dash?.self?.handle;
-  return `<div class="overlay">
-    <div class="overlay-backdrop" data-action="close-confirm"></div>
-    <div class="sheet confirm-sheet" role="alertdialog" aria-modal="true" aria-label="清空数据确认">
-      <div class="sheet-grab"></div>
-      <h2>清空 @${esc(handle || '当前账号')} 的数据？</h2>
-      <p>粉丝、关注、帖子、历史快照都会被删除，且无法恢复。建议先导出 JSON 备份。</p>
-      <div class="confirm-actions">
-        <button class="btn" type="button" data-action="close-confirm">取消</button>
-        <button class="btn danger" type="button" data-action="confirm-clear">删除全部数据</button>
-      </div>
-    </div>
-  </div>`;
-}
-
-function notifySyncResult(result) {
-  if (!result) return;
-  const label = SYNC_LABELS[result.kind] || '数据';
-  if (result.reason === 'cancelled') {
-    showToast('同步已取消', 'info');
-    return;
-  }
-  if (result.reason === 'rate_limited') {
-    showToast('X 限制了请求频率，已保存已抓取的数据，请稍后再试', 'error', 5200);
-    return;
-  }
-  if (result.reason === 'login_required' || result.reason === 'page_not_ready') {
-    showToast('未检测到已登录的 X 页面，请登录后重试', 'error', 5000);
-    return;
-  }
-  if (result.complete) {
-    const parts = [`${label}同步完成`];
-    if (result.addedCount) parts.push(`新增 ${formatInt(result.addedCount)}`);
-    if (result.missingCount) parts.push(`减少 ${formatInt(result.missingCount)}`);
-    if (!result.addedCount && !result.missingCount && result.total) parts.push(`${formatInt(result.total)} 条`);
-    showToast(parts.join(' · '), 'success', 4200);
-    return;
-  }
-  const reasons = {
-    tab_closed: '同步标签页被关闭，已保存部分数据',
-    navigated: '同步页被跳转，已保存部分数据',
-    stalled: '同步提前结束，可能未抓全，已保存部分数据',
-    partial: '这次抓取的名单明显偏少，已保存数据但跳过取关判断',
-    empty_scan: '这次同步没有抓到任何名单，请确认已登录后重试',
-    max_ticks: '已达到同步时长上限，已保存部分数据',
-    disconnected: '同步连接中断，已保存部分数据',
-    timeout: '同步超时，已保存部分数据',
-  };
-  const base = reasons[result.reason] || '同步未完成，已保存已抓取的数据';
-  const detail = result.missingCount ? ` · 本次有 ${formatInt(result.missingCount)} 位暂未出现` : '';
-  showToast(`${base}${detail}`, 'warning', 5200);
-}
-
-// ---------------------------------------------------------------------------
-// Actions
-// ---------------------------------------------------------------------------
-
-function onClick(event) {
-  const target = event.target.closest('[data-action]');
-  if (!target) return;
-  const action = target.dataset.action;
-
-  switch (action) {
-    case 'tab': {
-      const tab = target.dataset.tab;
-      if (!VIEWS[tab]) return;
-      if (tab !== ui.tab) {
-        ui.tab = tab;
-        ui.forceScrollTop = 0;
-      }
-      render();
-      break;
-    }
-    case 'open-sheet':
-    case 'open-sync-sheet': {
-      ui.sheet = true;
-      ui.confirm = null;
-      renderOverlay();
-      break;
-    }
-    case 'close-sheet': {
-      ui.sheet = false;
-      renderOverlay();
-      break;
-    }
-    case 'sync': {
-      startSync(target.dataset.kind);
-      break;
-    }
-    case 'cancel-sync': {
-      cancelSync();
-      break;
-    }
-    case 'chart-mode': {
-      ui.chartMode = target.dataset.mode === 'net' ? 'net' : 'followers';
-      ui.forceAnimate = true;
-      render();
-      break;
-    }
-    case 'people-filter': {
-      const filter = target.dataset.filter;
-      if (!['followers', 'following', 'lost'].includes(filter)) return;
-      ui.peopleFilter = filter;
-      ui.peopleLimit = 200;
-      ui.forceScrollTop = 0;
-      render();
-      break;
-    }
-    case 'more-people': {
-      ui.peopleLimit += 200;
-      render();
-      break;
-    }
-    case 'more-tweets': {
-      ui.tweetLimit += 40;
-      render();
-      break;
-    }
-    case 'open-x': {
-      openX(false);
-      break;
-    }
-    case 'open-profile': {
-      openX(true);
-      break;
-    }
-    case 'segmented': {
-      handleSegmented(target);
-      break;
-    }
-    case 'export-data': {
-      exportData();
-      break;
-    }
-    case 'ask-clear': {
-      ui.confirm = 'clear';
-      ui.sheet = false;
-      renderOverlay();
-      break;
-    }
-    case 'close-confirm': {
-      ui.confirm = null;
-      renderOverlay();
-      break;
-    }
-    case 'confirm-clear': {
-      clearAccount();
-      break;
-    }
-    default:
-      break;
-  }
-}
-
-function onChange(event) {
-  const target = event.target;
-  if (target.matches('[data-setting]')) {
-    const key = target.dataset.setting;
-    const value = target.type === 'checkbox' ? target.checked : target.value;
-    sendSettings({ [key]: key === 'syncMinutes' ? Number(value) : value });
-    return;
-  }
-  if (target.matches('[data-role="account-select"]')) {
-    chrome.runtime.sendMessage({ type: 'SET_ACCOUNT', handle: target.value }).catch(() => {});
-  }
-}
-
-function onInput(event) {
-  const target = event.target;
-  if (target.matches('[data-role="people-search"]')) {
-    ui.query = target.value;
-    ui.peopleLimit = 200;
-    scheduleRender(100);
-    return;
-  }
-  if (target.matches('[data-role="sync-minutes"]')) {
-    const output = document.querySelector('[data-role="sync-minutes-value"]');
-    if (output) output.textContent = `${target.value} 分钟`;
-    const fill = Math.round(((Number(target.value) - 2) / 28) * 100);
-    target.style.setProperty('--range-fill', `${fill}%`);
-  }
-}
-
-function handleSegmented(target) {
-  const name = target.dataset.segName;
-  const value = target.dataset.segValue;
-  if (!name || !value) return;
-  if (name === 'theme') {
-    ui.state.settings.theme = value;
-    applyTheme(resolveTheme());
-    render();
-    sendSettings({ theme: value });
-  }
-}
-
-async function sendSettings(patch) {
-  try {
-    const result = await chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', settings: patch });
-    if (!result?.ok) showToast('设置保存失败', 'error');
-  } catch {
-    showToast('设置保存失败', 'error');
-  }
-}
-
-async function startSync(kind) {
-  if (!kind) return;
-  if (ui.sync) {
-    showToast('已有同步任务在进行中', 'info');
-    return;
-  }
-  ui.sheet = false;
-  renderOverlay();
-  const result = await chrome.runtime.sendMessage({ type: 'RUN_SYNC', kind }).catch(() => null);
-  if (!result?.ok) {
-    const messages = {
-      NO_ACCOUNT: '请先登录 x.com 并打开任意页面，让插件识别账号',
-      SYNC_RUNNING: '已有同步任务在进行中',
-      PAGE_NOT_READY: 'X 页面加载超时，请确认已登录后重试',
-      TAB_FAILED: '无法打开同步标签页',
-      CANCELLED: '同步已取消',
-      BAD_KIND: '同步类型无效',
+    const started = performance.now();
+    const duration = 720;
+    const step = (now) => {
+      const progress = Math.min(1, (now - started) / duration);
+      const eased = 1 - (1 - progress) ** 3;
+      el.textContent = formatBig(Math.round(from + (target - from) * eased));
+      if (progress < 1) requestAnimationFrame(step);
     };
-    showToast(messages[result?.error] || '同步启动失败，请稍后重试', 'error', 4800);
-    return;
+    requestAnimationFrame(step);
   }
-  showToast(`已打开 X ${SYNC_LABELS[kind] || ''}页面，正在同步…`, 'info', 2600);
-  fetchSyncStatus();
 }
 
-async function cancelSync() {
-  ui.sheet = false;
-  renderOverlay();
+function apply(next) {
+  const sig = JSON.stringify(next || null);
+  if (sig === signature) return;
+  signature = sig;
+  account = next;
+  render();
+}
+
+async function refresh() {
   try {
-    await chrome.runtime.sendMessage({ type: 'CANCEL_SYNC' });
+    const result = await chrome.runtime.sendMessage({ type: 'GET_ACCOUNT' });
+    apply(result?.ok ? { self: result.self, profile: result.profile, updatedAt: result.updatedAt } : null);
   } catch {
-    // ignore
+    // Extension context is gone (e.g. reloaded); keep whatever is on screen.
   }
 }
 
-function openX(profileOnly) {
-  const handle = ui.dash?.self?.handle;
-  const url = profileOnly && handle ? `https://x.com/${handle}` : 'https://x.com/home';
-  chrome.tabs.create({ url }).catch(() => {});
-}
-
-async function exportData() {
+app.addEventListener('click', (event) => {
+  const trigger = event.target.closest('[data-action="open-x"]');
+  if (!trigger) return;
   try {
-    const payload = {
-      app: 'X Monitor',
-      version: chrome.runtime.getManifest().version,
-      exportedAt: new Date().toISOString(),
-      state: ui.state,
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    const handle = ui.dash?.self?.handle || 'data';
-    link.href = url;
-    link.download = `x-monitor-${handle}-${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    showToast('已导出 JSON 备份', 'success');
+    chrome.tabs.create({ url: 'https://x.com' });
   } catch {
-    showToast('导出失败，请重试', 'error');
+    window.open('https://x.com', '_blank', 'noopener');
   }
-}
+});
 
-async function clearAccount() {
-  ui.confirm = null;
-  renderOverlay();
-  try {
-    const result = await chrome.runtime.sendMessage({ type: 'CLEAR_ACCOUNT' });
-    if (result?.ok) {
-      showToast('已清空当前账号数据', 'success');
-      await loadState();
-      render();
-    } else {
-      showToast('清空失败，请重试', 'error');
-    }
-  } catch {
-    showToast('清空失败，请重试', 'error');
-  }
-}
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === 'ACCOUNT_UPDATED') refresh();
+});
 
-function captureFocus() {
-  const active = document.activeElement;
-  if (!active || !els.view?.contains(active)) return null;
-  const key = active.dataset?.focusKey;
-  if (!key) return null;
-  let start = null;
-  let end = null;
-  try {
-    start = active.selectionStart;
-    end = active.selectionEnd;
-  } catch {
-    // Inputs like number/select do not expose selection.
-  }
-  return { key, start, end };
-}
+// Keep "更新于 …" honest without re-rendering (and re-animating) the card.
+setInterval(() => {
+  const el = app.querySelector('.foot-time');
+  const ts = account?.profile?.ts || account?.updatedAt;
+  if (el && ts) el.textContent = `更新于 ${relativeTime(ts)}`;
+}, 30_000);
 
-function restoreFocus(info) {
-  if (!info) return;
-  const next = els.view.querySelector(`[data-focus-key="${info.key}"]`);
-  if (!next) return;
-  next.focus();
-  if (info.start != null && typeof next.setSelectionRange === 'function') {
-    try {
-      next.setSelectionRange(info.start, info.end ?? info.start);
-    } catch {
-      // ignore
-    }
-  }
-}
-
-function resolveTheme() {
-  const setting = ui.state?.settings?.theme || 'system';
-  if (setting === 'dark' || setting === 'light') return setting;
-  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-}
-
-function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
-}
+refresh();

@@ -1,27 +1,17 @@
 /**
  * Runs in the page's MAIN world at document_start.
  *
- * X loads everything it needs through /i/api/graphql. We passively observe the
- * responses the logged-in browser already receives and forward the useful ones
- * to the isolated content script. No extra network requests, no bearer token,
- * no API keys.
+ * X loads everything through /i/api/graphql. We passively observe the responses
+ * the logged-in browser already receives and forward only the two that describe
+ * an account: Viewer (logged-in user) and UserByScreenName (a profile).
+ *
+ * No extra requests, no bearer token, no API key.
  */
 (() => {
   'use strict';
 
   if (window.__xMonitorHooked) return;
   window.__xMonitorHooked = true;
-
-  const OPS = new Set([
-    'UserByScreenName',
-    'UserByScreenNameV2',
-    'Followers',
-    'Following',
-    'UserTweets',
-    'UserTweetsAndReplies',
-    'UserMedia',
-    'Viewer',
-  ]);
 
   function opFromUrl(url) {
     try {
@@ -36,7 +26,7 @@
   function shouldCapture(url) {
     if (!url || !String(url).includes('/i/api/graphql/')) return false;
     const op = opFromUrl(url);
-    return OPS.has(op) || op.startsWith('UserByScreenName') || op.startsWith('UserTweets');
+    return op === 'Viewer' || op === 'UserByRestId' || op.startsWith('UserByScreenName');
   }
 
   function post(url, status, payload) {
@@ -60,10 +50,6 @@
   function handleResponse(url, status, readJson) {
     if (!shouldCapture(url)) return;
     try {
-      if (status === 429) {
-        post(url, status, null);
-        return;
-      }
       if (status < 200 || status >= 300) return;
       readJson()
         .then((payload) => post(url, status, payload))
