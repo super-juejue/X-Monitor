@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>X Monitor</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <div class="splash">
+      <div class="splash-logo logo">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M3.5 15.5 8 9.5l3.4 3.9L16 5.5l4.5 5" stroke="white" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="20.5" cy="16.5" r="2" fill="white" fill-opacity=".9"/>
+        </svg>
+      </div>
+      <div class="splash-brand">X Monitor</div>
+      <div class="splash-sub">正在读取本地数据</div>
+      <div class="splash-line"><span></span></div>
+    </div>
+  </div>
+  <div id="sheet-root"></div>
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

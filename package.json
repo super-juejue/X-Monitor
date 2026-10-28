@@ -1,0 +1,10 @@
+{
+  "name": "x-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Chrome side panel extension that tracks X (Twitter) stats locally.",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  }
+}

@@ -1,0 +1,9 @@
+.DS_Store
+node_modules/
+*.log
+*.zip
+.chrome-profile/
+test-results/
+screenshots/.cache/
+__pycache__/
+*.pyc
