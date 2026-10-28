@@ -171,6 +171,37 @@ body {
   transform: translateY(0);
 }
 
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.icon-btn[disabled] {
+  cursor: default;
+  transform: none;
+}
+
+.icon-btn.spinning {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.icon-btn.spinning svg {
+  animation: spin 0.9s linear infinite;
+}
+
+/* Result of the last manual refresh; fades in only when there is something to say. */
+.note {
+  margin: 12px 2px 0;
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+  /* Not --text-3: this line has to be readable, it is the only feedback. */
+  color: var(--text-2);
+  animation: fade 0.28s var(--ease) both;
+}
+
 /* ----------------------------------------------------------------- content */
 
 .content {
@@ -429,13 +460,6 @@ body {
 
 .btn:active {
   transform: translateY(0);
-}
-
-.btn.small {
-  margin-top: 10px;
-  padding: 7px 12px;
-  font-size: 11.5px;
-  border-radius: 9px;
 }
 
 /* ------------------------------------------------------------------ loading */

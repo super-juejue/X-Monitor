@@ -13,9 +13,17 @@
   const host = location.hostname.replace(/^www\./, '');
   if (host !== 'x.com' && host !== 'twitter.com') return;
 
+  /**
+   * Identifies this document for as long as it lives, starting with the moment
+   * it was created. A refresh only accepts numbers from a document born after
+   * it started: the page being replaced keeps a few timers alive, and its last
+   * report carries the numbers that are already on screen.
+   */
+  const DOC = `${Date.now()}~${Math.random().toString(36).slice(2, 8)}`;
+
   const send = (message) => {
     try {
-      const result = chrome.runtime.sendMessage(message);
+      const result = chrome.runtime.sendMessage({ ...message, doc: DOC });
       if (result && typeof result.catch === 'function') result.catch(() => {});
     } catch {
       // Extension was reloaded; the page must be refreshed.

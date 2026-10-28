@@ -17,6 +17,10 @@ const ICONS = {
   external: `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
     <path d="M14 4h6v6M20 4l-8.5 8.5M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
   </svg>`,
+  refresh: `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path d="M20 11.5A8 8 0 1 0 18 17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    <path d="M20.2 3.8v5.4h-5.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`,
   verified: `<svg viewBox="0 0 24 24" aria-hidden="true">
     <path fill="#1d9bf0" d="M12 1.6l2.6 2.1 3.3-.5 1.2 3.1 2.9 1.7-1 3.2 1 3.2-2.9 1.7-1.2 3.1-3.3-.5L12 22.4l-2.6-2.1-3.3.5-1.2-3.1-2.9-1.7 1-3.2-1-3.2 2.9-1.7 1.2-3.1 3.3.5z"/>
     <path fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" d="M8.2 12.2l2.5 2.5 5-5.2"/>
@@ -35,6 +39,19 @@ let account = null;
 let signature = '';
 /** Entry animations belong to the first paint only, not to every refresh. */
 let mounted = false;
+/** True while a manual refresh is in flight. */
+let busy = false;
+/** Transient line under the card: the result of the last refresh. */
+let note = '';
+let noteTimer = null;
+
+const REFRESH_ERRORS = {
+  NO_ACCOUNT: '还没识别到账号，先打开 x.com',
+  TIMEOUT: '没能拿到新数据，确认已登录后再试一次',
+  BUSY: '正在刷新，稍等一下',
+  TAB_FAILED: '打不开 X 页面，请手动打开一次',
+  FAILED: '刷新失败，请重试',
+};
 
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
   '&': '&amp;',
@@ -91,11 +108,8 @@ function accountView(data) {
       <span class="foot-time">${ts ? `更新于 ${relativeTime(ts)}` : '还没读到粉丝数'}</span>
     </div>
     ${profile ? '' : `<p class="hint">
-      打开一次你的主页就能读到数字，插件会顺着页面已经收到的数据记下来。
-    </p>
-    <button class="btn small" type="button" data-action="open-profile">
-      ${ICONS.external}<span>打开我的主页</span>
-    </button>`}
+      点右上角的刷新按钮，会打开一次你的主页，把数字读回来。
+    </p>`}
   </section>`;
 }
 
@@ -126,12 +140,19 @@ function render() {
         <span class="brand-mark">${ICONS.logo}</span>
         <span class="brand-name">X Monitor</span>
       </div>
-      <button class="icon-btn" type="button" data-action="open-x" title="打开 x.com" aria-label="打开 x.com">
-        ${ICONS.external}
-      </button>
+      <div class="top-actions">
+        ${account.self ? `<button class="icon-btn${busy ? ' spinning' : ''}" type="button" data-action="refresh"
+          title="${busy ? '正在刷新' : '刷新数据'}" aria-label="刷新数据"${busy ? ' disabled' : ''}>
+          ${ICONS.refresh}
+        </button>` : ''}
+        <button class="icon-btn" type="button" data-action="open-x" title="打开 x.com" aria-label="打开 x.com">
+          ${ICONS.external}
+        </button>
+      </div>
     </header>
     <main class="content">
       ${account.self ? accountView(account) : emptyView()}
+      ${note ? `<p class="note" role="status">${esc(note)}</p>` : ''}
     </main>`;
 
   if (mounted) {
@@ -185,7 +206,8 @@ function apply(next) {
   render();
 }
 
-async function refresh() {
+/** Read the stored account from the worker. Changing nothing on X. */
+async function loadAccount() {
   try {
     const result = await chrome.runtime.sendMessage({ type: 'GET_ACCOUNT' });
     apply(result?.ok ? { self: result.self, profile: result.profile, updatedAt: result.updatedAt } : null);
@@ -194,16 +216,47 @@ async function refresh() {
   }
 }
 
+/**
+ * Ask the worker to make X hand over fresh numbers. The panel cannot fetch
+ * them itself, so this always costs one page load — see refreshAccount in the
+ * worker for how the tab is chosen.
+ */
+async function refreshNow() {
+  if (busy) return;
+  busy = true;
+  note = '';
+  clearTimeout(noteTimer);
+  render();
+
+  let message = '';
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'REFRESH' });
+    message = result?.ok ? '已拿到最新数据' : REFRESH_ERRORS[result?.error] || REFRESH_ERRORS.FAILED;
+  } catch {
+    message = REFRESH_ERRORS.FAILED;
+  }
+
+  await loadAccount();
+  busy = false;
+  note = message;
+  render();
+
+  noteTimer = setTimeout(() => {
+    note = '';
+    render();
+  }, 6000);
+}
+
 app.addEventListener('click', (event) => {
-  const openX = event.target.closest('[data-action="open-x"]');
-  if (openX) {
-    openTab('https://x.com');
+  const refreshBtn = event.target.closest('[data-action="refresh"]');
+  if (refreshBtn) {
+    refreshNow();
     return;
   }
 
-  const openProfile = event.target.closest('[data-action="open-profile"]');
-  if (openProfile && account?.self?.handle) {
-    openTab(`https://x.com/${encodeURIComponent(account.self.handle)}`);
+  const openX = event.target.closest('[data-action="open-x"]');
+  if (openX) {
+    openTab('https://x.com');
   }
 });
 
@@ -228,7 +281,7 @@ async function openTab(url) {
 }
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === 'ACCOUNT_UPDATED') refresh();
+  if (message?.type === 'ACCOUNT_UPDATED') loadAccount();
 });
 
 // Keep "更新于 …" honest without re-rendering (and re-animating) the card.
@@ -238,4 +291,4 @@ setInterval(() => {
   if (el && ts) el.textContent = `更新于 ${relativeTime(ts)}`;
 }, 30_000);
 
-refresh();
+loadAccount();

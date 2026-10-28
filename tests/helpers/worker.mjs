@@ -11,8 +11,18 @@ export const STORAGE_KEY = 'xmonitor_account';
 export async function bootWorker(options = {}) {
   const store = { ...(options.store || {}) };
   let messageListener = null;
+  let nextTabId = 100;
 
   const clone = (value) => (value === undefined ? undefined : structuredClone(value));
+
+  /** Tab strip the worker sees, plus a log of what it did to each tab. */
+  const tabs = (options.tabs || []).map((tab) => ({ id: nextTabId++, ...tab }));
+  const calls = { reload: [], create: [], remove: [], update: [] };
+
+  const matches = (url, patterns) => patterns.some((pattern) => {
+    const prefix = pattern.replace(/\*+$/, '');
+    return String(url || '').startsWith(prefix);
+  });
 
   globalThis.chrome = {
     storage: {
@@ -33,6 +43,38 @@ export async function bootWorker(options = {}) {
           for (const k of Array.isArray(key) ? key : [key]) delete store[k];
         },
       },
+    },
+    tabs: {
+      // With host permissions for x.com, its urls are readable without "tabs".
+      async query(filter = {}) {
+        const scoped = filter.url ? tabs.filter((tab) => matches(tab.url, filter.url)) : tabs;
+        return scoped.map((tab) => ({ ...tab }));
+      },
+      async reload(id) {
+        calls.reload.push(id);
+      },
+      async create(props) {
+        const tab = { id: nextTabId++, url: props.url, active: props.active ?? true };
+        tabs.push(tab);
+        calls.create.push({ ...props, id: tab.id });
+        return { ...tab };
+      },
+      async remove(id) {
+        calls.remove.push(id);
+        const index = tabs.findIndex((tab) => tab.id === id);
+        if (index < 0) throw new Error('No tab with id');
+        tabs.splice(index, 1);
+      },
+      async update(id, props) {
+        calls.update.push({ id, ...props });
+        const tab = tabs.find((t) => t.id === id);
+        if (!tab) throw new Error('No tab with id');
+        Object.assign(tab, props);
+        return { ...tab };
+      },
+    },
+    windows: {
+      async update() {},
     },
     runtime: {
       onMessage: { addListener(fn) { messageListener = fn; } },
@@ -56,7 +98,7 @@ export async function bootWorker(options = {}) {
 
   const wait = (ms = 60) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  return { store, call, wait, stateNow: () => store[STORAGE_KEY] };
+  return { store, call, wait, tabs, calls, stateNow: () => store[STORAGE_KEY] };
 }
 
 // ---------------------------------------------------------------------------

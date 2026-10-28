@@ -139,6 +139,7 @@ async function handleCapture(message) {
   if (!user && known) user = findKnownUser(root, known);
   if (!user?.handle) return;
 
+  const counts = pickCounts(user);
   const changed = await mutate((state) => {
     const current = state.self?.handle || '';
     // A Viewer response is the only one that proves who is logged in. Every
@@ -149,11 +150,12 @@ async function handleCapture(message) {
     // Numbers belong to the account they came from.
     if (state.profile && !sameHandle(state.profile.handle, user.handle)) state.profile = null;
     state.self = mergeSelf(state.self, user);
-    const counts = pickCounts(user);
     if (counts) state.profile = { handle: user.handle, ...counts, ts: Date.now() };
     return true;
   });
-  if (changed) notify();
+  if (!changed) return;
+  notify();
+  if (counts) settleRefresh(user.handle, message.doc);
 }
 
 /**
@@ -161,18 +163,17 @@ async function handleCapture(message) {
  * so a revisit can update the DOM without any request the hook could observe.
  * The content script only sends this after confirming the page is your own.
  */
-async function handleProfileHint(hint) {
+async function handleProfileHint(hint, doc) {
   const handle = String(hint?.handle || '').replace(/^@/, '').trim();
   if (!/^[A-Za-z0-9_]{1,15}$/.test(handle)) return { ok: false };
 
+  const counts = pickCounts({ ...(hint.counts || {}) });
   const changed = await mutate((state) => {
     const current = state.self?.handle || '';
     // Stay strict: a hint may only describe the account we already know, or
     // bootstrap one when the page itself proved it is your own profile.
     if (current && !sameHandle(current, handle)) return false;
     if (!current && !hint.verified) return false;
-
-    const counts = pickCounts({ ...(hint.counts || {}) });
     if (!current && !counts) return false;
 
     if (!current) state.self = mergeSelf(null, { handle, name: hint.name || '' });
@@ -187,8 +188,141 @@ async function handleProfileHint(hint) {
     }
     return true;
   });
-  if (changed) notify();
+  if (!changed) return { ok: true };
+  notify();
+  if (counts) settleRefresh(handle, doc);
   return { ok: true };
+}
+
+/** True when two urls point at the same page (path, case-insensitive). */
+function samePath(a, b) {
+  try {
+    const ua = new URL(a);
+    const ub = new URL(b);
+    const host = (u) => u.hostname.replace(/^www\./, '').toLowerCase();
+    if (host(ua) !== host(ub)) return false;
+    const path = (u) => u.pathname.replace(/\/+$/, '').toLowerCase();
+    return path(ua) === path(ub);
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Manual refresh
+// ---------------------------------------------------------------------------
+
+/**
+ * When each document first reported, in first-seen order. Used for documents
+ * that do not carry their own start time.
+ */
+const documents = new Map();
+const DOCUMENT_LIMIT = 24;
+
+function firstSeen(doc) {
+  if (typeof doc !== 'string' || !doc) return 0;
+  if (!documents.has(doc)) {
+    documents.set(doc, Date.now());
+    if (documents.size > DOCUMENT_LIMIT) documents.delete(documents.keys().next().value);
+  }
+  return documents.get(doc);
+}
+
+/** The content script prefixes its document id with when that page was created. */
+function documentStart(doc) {
+  const match = /^(\d{10,})~/.exec(String(doc || ''));
+  return match ? Number(match[1]) : 0;
+}
+
+/**
+ * A pending refresh. Counts can only come from X itself, so a refresh has to
+ * make a page load: either the profile tab the user already has open, or a
+ * hidden tab we open and close. This holds the promise that resolves when the
+ * numbers actually arrive.
+ */
+let waiter = null;
+
+/** Resolve a pending refresh once numbers from a page loaded after it started land. */
+function settleRefresh(handle, doc) {
+  if (!waiter || !sameHandle(waiter.handle, handle)) return;
+  // A page that already existed when the button was pressed is the one being
+  // replaced, however late its first report happens to arrive.
+  const seen = documentStart(doc) || firstSeen(doc);
+  if (!seen || seen < waiter.since) return;
+  const done = waiter;
+  waiter = null;
+  clearTimeout(done.timer);
+  done.resolve({ ok: true });
+}
+
+// Overridable so tests do not have to sit through the real timeout.
+const refreshTimeout = () => Number(globalThis.__xmonitorRefreshTimeoutMs) || 15_000;
+
+/**
+ * Start waiting for counts. Registered before any tab work, because the page
+ * can answer faster than `chrome.tabs.create` resolves.
+ */
+function startWaiter(handle) {
+  let entry = null;
+  const promise = new Promise((resolve) => {
+    const finish = (value) => {
+      if (waiter === entry) waiter = null;
+      clearTimeout(entry.timer);
+      resolve(value);
+    };
+    entry = {
+      handle,
+      since: Date.now(),
+      resolve: finish,
+      timer: setTimeout(() => finish({ ok: false, error: 'TIMEOUT' }), refreshTimeout()),
+    };
+    waiter = entry;
+  });
+  return { promise, cancel: () => entry.resolve({ ok: false, error: 'TAB_FAILED' }) };
+}
+
+async function refreshAccount() {
+  if (waiter) return { ok: false, error: 'BUSY' };
+
+  const state = await load();
+  const handle = state.self?.handle;
+  if (!handle) return { ok: false, error: 'NO_ACCOUNT' };
+  if (waiter) return { ok: false, error: 'BUSY' };
+
+  const pending = startWaiter(handle);
+  const profileUrl = `https://x.com/${handle}`;
+  let createdTab = null;
+
+  try {
+    const tabs = await chrome.tabs.query({ url: ['https://x.com/*', 'https://twitter.com/*'] });
+    const onProfile = tabs.find((tab) => tab.id != null && samePath(tab.url, profileUrl));
+
+    if (onProfile) {
+      // Already looking at the profile: reloading it is expected, and it
+      // re-runs X's boot queries so the numbers are fresh rather than cached.
+      await chrome.tabs.reload(onProfile.id);
+    } else {
+      // Load it hidden instead: reloading whatever the user is reading would
+      // throw away their position. The tab closes itself as soon as we are done.
+      const tab = await chrome.tabs.create({ url: profileUrl, active: false });
+      createdTab = tab?.id ?? null;
+    }
+  } catch {
+    pending.cancel();
+    return pending.promise;
+  }
+
+  const result = await pending.promise;
+
+  if (createdTab != null) {
+    try {
+      await chrome.tabs.remove(createdTab);
+    } catch {
+      // The tab was already gone.
+    }
+  }
+
+  return result;
 }
 
 /** Only expose numbers that belong to the account currently shown. */
@@ -205,6 +339,10 @@ function publicAccount(state) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== 'string') return undefined;
 
+  // Stamp the sending document before any await, so a refresh can tell the
+  // page it just caused to load apart from the one that was already there.
+  if (message.doc) firstSeen(message.doc);
+
   switch (message.type) {
     case 'CAPTURE':
       handleCapture(message)
@@ -219,7 +357,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
 
     case 'PROFILE_HINT':
-      handleProfileHint(message.hint)
+      handleProfileHint(message.hint, message.doc)
         .then(sendResponse)
         .catch(() => sendResponse({ ok: false }));
       return true;
@@ -228,6 +366,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       load()
         .then((state) => sendResponse({ ok: true, ...publicAccount(state) }))
         .catch(() => sendResponse({ ok: false }));
+      return true;
+
+    case 'REFRESH':
+      refreshAccount()
+        .then(sendResponse)
+        .catch(() => sendResponse({ ok: false, error: 'FAILED' }));
       return true;
 
     default:
