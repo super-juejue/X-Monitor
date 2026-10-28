@@ -2,7 +2,8 @@
   "manifest_version": 3,
   "name": "X Monitor",
   "version": "0.1.0",
-  "description": "在侧边栏显示当前登录的 X 账号信息。只读、本地保存、无需 API Key。",
+  "description": "__MSG_appDesc__",
+  "default_locale": "en",
   "minimum_chrome_version": "116",
   "permissions": [
     "storage",

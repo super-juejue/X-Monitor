@@ -113,6 +113,21 @@ Click **refresh** in the top right. It loads your profile once more and the
 numbers follow. You can also open your own profile yourself; the
 "open x.com" button reuses a tab you already have instead of opening another.
 
+## Languages
+
+The panel follows Chrome's language: English and Simplified Chinese are
+included, and anything else falls back to English.
+
+| English | 简体中文 |
+| --- | --- |
+| ![](docs/panel.png) | ![](docs/panel-zh.png) |
+
+Wording and its translations live in `_locales/`, the standard Chrome message
+bundles, so adding a language means adding one folder. Numbers and dates are
+formatted by `Intl` with the language Chrome resolved, not with a fixed locale.
+`npm test` checks that every bundle defines the same keys and that no copy is
+hard-coded in the source.
+
 ## Permissions
 
 | Permission | Why |
@@ -136,13 +151,14 @@ No build step and no runtime dependencies. After editing the source, hit reload
 on `chrome://extensions`.
 
 ```
-manifest.json
+manifest.json       # default_locale, plus __MSG_appDesc__ for the description
+_locales/           # en and zh_CN message bundles
 icons/              # extension icons
 src/
   page-hook.js      # main world, observes GraphQL responses in passing
   content.js        # bridge, plus the @handle and the profile counts
   background.js     # service worker: state, and how three sources merge
-  lib/              # parsing and formatting (pure functions, tested alone)
+  lib/              # parsing, formatting and translations (pure, tested alone)
   sidepanel/        # the panel (native ES modules, no framework)
 tests/              # node:test
 docs/               # screenshots

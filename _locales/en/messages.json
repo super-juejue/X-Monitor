@@ -1,0 +1,101 @@
+{
+  "appDesc": {
+    "message": "Shows the X account you are signed in as in the side panel. Read-only, stored locally, no API key needed.",
+    "description": "Extension description, shown on the chrome://extensions card"
+  },
+  "statFollowers": {
+    "message": "Followers",
+    "description": "Label under the follower count"
+  },
+  "statFollowing": {
+    "message": "Following",
+    "description": "Label under the following count"
+  },
+  "statTweets": {
+    "message": "Posts",
+    "description": "Label under the post count"
+  },
+  "panelUpdated": {
+    "message": "Updated $WHEN$",
+    "description": "Footer line: when the numbers were last read",
+    "placeholders": {
+      "when": { "content": "$1", "example": "5 minutes ago" }
+    }
+  },
+  "panelNoFollowers": {
+    "message": "Followers not read yet",
+    "description": "Footer line shown while the counts are still missing"
+  },
+  "panelHint": {
+    "message": "Use refresh in the top right. It loads your profile once and reads the numbers back."
+  },
+  "verifiedAccount": {
+    "message": "Verified account",
+    "description": "Tooltip on the blue check"
+  },
+  "emptyTitle": {
+    "message": "Your account has not been read yet"
+  },
+  "emptyBody": {
+    "message": "Open x.com in this browser and sign in. Your avatar and follower count will appear here on their own."
+  },
+  "emptyAction": {
+    "message": "Open x.com"
+  },
+  "openX": {
+    "message": "Open x.com",
+    "description": "Tooltip on the button that opens x.com"
+  },
+  "refreshTitle": {
+    "message": "Refresh numbers"
+  },
+  "refreshingTitle": {
+    "message": "Refreshing"
+  },
+  "refreshDone": {
+    "message": "Latest numbers received"
+  },
+  "refreshNoAccount": {
+    "message": "No account yet, open x.com first"
+  },
+  "refreshTimeout": {
+    "message": "No new numbers arrived. Check that you are signed in and try again."
+  },
+  "refreshBusy": {
+    "message": "Already refreshing, give it a moment"
+  },
+  "refreshTabFailed": {
+    "message": "Could not open x.com. Open it yourself once."
+  },
+  "refreshFailed": {
+    "message": "Refresh failed, try again"
+  },
+  "loading": {
+    "message": "Reading local data"
+  },
+  "timeNow": {
+    "message": "just now",
+    "description": "Relative time, less than a minute ago"
+  },
+  "timeMinutes": {
+    "message": "$COUNT$ min ago",
+    "placeholders": {
+      "count": { "content": "$1", "example": "5" }
+    }
+  },
+  "timeHours": {
+    "message": "$COUNT$ h ago",
+    "placeholders": {
+      "count": { "content": "$1", "example": "3" }
+    }
+  },
+  "timeYesterday": {
+    "message": "yesterday"
+  },
+  "timeDays": {
+    "message": "$COUNT$ d ago",
+    "placeholders": {
+      "count": { "content": "$1", "example": "4" }
+    }
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "appDesc": {
+    "message": "在侧边栏显示当前登录的 X 账号信息。只读、本地保存、无需 API Key。",
+    "description": "扩展描述，显示在 chrome://extensions 的卡片上"
+  },
+  "statFollowers": {
+    "message": "粉丝",
+    "description": "粉丝数下面的标签"
+  },
+  "statFollowing": {
+    "message": "关注",
+    "description": "关注数下面的标签"
+  },
+  "statTweets": {
+    "message": "帖子",
+    "description": "帖子数下面的标签"
+  },
+  "panelUpdated": {
+    "message": "更新于 $WHEN$",
+    "description": "卡片底部：这些数字最后一次读到的相对时间",
+    "placeholders": {
+      "when": { "content": "$1", "example": "5 分钟前" }
+    }
+  },
+  "panelNoFollowers": {
+    "message": "还没读到粉丝数",
+    "description": "数字还没拿到时卡片底部的说明"
+  },
+  "panelHint": {
+    "message": "点右上角的刷新按钮，会打开一次你的主页，把数字读回来。"
+  },
+  "verifiedAccount": {
+    "message": "已验证账号",
+    "description": "蓝标上的提示"
+  },
+  "emptyTitle": {
+    "message": "还没有读到你的账号"
+  },
+  "emptyBody": {
+    "message": "在浏览器里打开并登录 x.com，这里会自动显示你的头像和粉丝数。"
+  },
+  "emptyAction": {
+    "message": "打开 x.com"
+  },
+  "openX": {
+    "message": "打开 x.com",
+    "description": "打开 x.com 按钮的提示"
+  },
+  "refreshTitle": {
+    "message": "刷新数据"
+  },
+  "refreshingTitle": {
+    "message": "正在刷新"
+  },
+  "refreshDone": {
+    "message": "已拿到最新数据"
+  },
+  "refreshNoAccount": {
+    "message": "还没识别到账号，先打开 x.com"
+  },
+  "refreshTimeout": {
+    "message": "没能拿到新数据，确认已登录后再试一次"
+  },
+  "refreshBusy": {
+    "message": "正在刷新，稍等一下"
+  },
+  "refreshTabFailed": {
+    "message": "打不开 X 页面，请手动打开一次"
+  },
+  "refreshFailed": {
+    "message": "刷新失败，请重试"
+  },
+  "loading": {
+    "message": "正在读取本地数据"
+  },
+  "timeNow": {
+    "message": "刚刚",
+    "description": "相对时间：不到一分钟"
+  },
+  "timeMinutes": {
+    "message": "$COUNT$ 分钟前",
+    "placeholders": {
+      "count": { "content": "$1", "example": "5" }
+    }
+  },
+  "timeHours": {
+    "message": "$COUNT$ 小时前",
+    "placeholders": {
+      "count": { "content": "$1", "example": "3" }
+    }
+  },
+  "timeYesterday": {
+    "message": "昨天"
+  },
+  "timeDays": {
+    "message": "$COUNT$ 天前",
+    "placeholders": {
+      "count": { "content": "$1", "example": "4" }
+    }
+  }
+}

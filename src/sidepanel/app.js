@@ -3,9 +3,15 @@
  *
  * One card: who you are on X, and your current numbers. Everything is read from
  * the worker, which gets it from X's own responses — the panel never fetches.
+ * All wording comes from the message bundles, so it follows Chrome's language.
  */
 
-import { formatBig, relativeTime } from '../lib/time.js';
+import { bundleLocale, t } from '../lib/i18n.js';
+import { formatBig, relativeTime, setLocale } from '../lib/time.js';
+
+const language = bundleLocale();
+setLocale(language);
+document.documentElement.lang = language;
 
 const app = document.getElementById('app');
 
@@ -28,9 +34,9 @@ const ICONS = {
 };
 
 const STATS = [
-  { key: 'followers', label: '粉丝' },
-  { key: 'following', label: '关注' },
-  { key: 'tweets', label: '帖子' },
+  { key: 'followers', labelKey: 'statFollowers' },
+  { key: 'following', labelKey: 'statFollowing' },
+  { key: 'tweets', labelKey: 'statTweets' },
 ];
 
 /** Values already shown, so a refresh counts up from them instead of zero. */
@@ -45,12 +51,13 @@ let busy = false;
 let note = '';
 let noteTimer = null;
 
+/** Message keys for the result line, translated when it is shown. */
 const REFRESH_ERRORS = {
-  NO_ACCOUNT: '还没识别到账号，先打开 x.com',
-  TIMEOUT: '没能拿到新数据，确认已登录后再试一次',
-  BUSY: '正在刷新，稍等一下',
-  TAB_FAILED: '打不开 X 页面，请手动打开一次',
-  FAILED: '刷新失败，请重试',
+  NO_ACCOUNT: 'refreshNoAccount',
+  TIMEOUT: 'refreshTimeout',
+  BUSY: 'refreshBusy',
+  TAB_FAILED: 'refreshTabFailed',
+  FAILED: 'refreshFailed',
 };
 
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
@@ -77,12 +84,12 @@ function avatarHtml(self) {
 }
 
 function statsHtml(profile) {
-  return `<div class="stats">${STATS.map(({ key, label }) => {
+  return `<div class="stats">${STATS.map(({ key, labelKey }) => {
     const value = profile?.[key];
     const has = typeof value === 'number' && Number.isFinite(value);
     return `<div class="stat">
       <span class="stat-num"${has ? ` data-count="${value}" data-key="${key}"` : ''}>${has ? formatBig(value) : '—'}</span>
-      <span class="stat-label">${label}</span>
+      <span class="stat-label">${esc(t(labelKey))}</span>
     </div>`;
   }).join('')}</div>`;
 }
@@ -97,7 +104,7 @@ function accountView(data) {
       <div class="who">
         <div class="name-row">
           <span class="name">${esc(self.name || self.handle)}</span>
-          ${self.verified ? `<span class="verified" title="已验证账号">${ICONS.verified}</span>` : ''}
+          ${self.verified ? `<span class="verified" title="${esc(t('verifiedAccount'))}">${ICONS.verified}</span>` : ''}
         </div>
         <div class="handle">@${esc(self.handle)}</div>
       </div>
@@ -105,27 +112,25 @@ function accountView(data) {
     ${statsHtml(profile)}
     <div class="foot">
       <span class="dot${profile ? ' live' : ''}"></span>
-      <span class="foot-time">${ts ? `更新于 ${relativeTime(ts)}` : '还没读到粉丝数'}</span>
+      <span class="foot-time">${ts ? esc(t('panelUpdated', [relativeTime(ts)])) : esc(t('panelNoFollowers'))}</span>
     </div>
-    ${profile ? '' : `<p class="hint">
-      点右上角的刷新按钮，会打开一次你的主页，把数字读回来。
-    </p>`}
+    ${profile ? '' : `<p class="hint">${esc(t('panelHint'))}</p>`}
   </section>`;
 }
 
 function emptyView() {
   return `<section class="empty">
     <div class="empty-mark">${ICONS.logo}</div>
-    <h1>还没有读到你的账号</h1>
-    <p>在浏览器里打开并登录 x.com，这里会自动显示你的头像和粉丝数。</p>
+    <h1>${esc(t('emptyTitle'))}</h1>
+    <p>${esc(t('emptyBody'))}</p>
     <button class="btn" type="button" data-action="open-x">
-      ${ICONS.external}<span>打开 x.com</span>
+      ${ICONS.external}<span>${esc(t('emptyAction'))}</span>
     </button>
   </section>`;
 }
 
 function loadingView() {
-  return `<div class="loading" aria-label="正在读取本地数据"><span class="spinner"></span></div>`;
+  return `<div class="loading" aria-label="${esc(t('loading'))}"><span class="spinner"></span></div>`;
 }
 
 function render() {
@@ -142,10 +147,10 @@ function render() {
       </div>
       <div class="top-actions">
         ${account.self ? `<button class="icon-btn${busy ? ' spinning' : ''}" type="button" data-action="refresh"
-          title="${busy ? '正在刷新' : '刷新数据'}" aria-label="刷新数据"${busy ? ' disabled' : ''}>
+          title="${esc(t(busy ? 'refreshingTitle' : 'refreshTitle'))}" aria-label="${esc(t('refreshTitle'))}"${busy ? ' disabled' : ''}>
           ${ICONS.refresh}
         </button>` : ''}
-        <button class="icon-btn" type="button" data-action="open-x" title="打开 x.com" aria-label="打开 x.com">
+        <button class="icon-btn" type="button" data-action="open-x" title="${esc(t('openX'))}" aria-label="${esc(t('openX'))}">
           ${ICONS.external}
         </button>
       </div>
@@ -231,9 +236,11 @@ async function refreshNow() {
   let message = '';
   try {
     const result = await chrome.runtime.sendMessage({ type: 'REFRESH' });
-    message = result?.ok ? '已拿到最新数据' : REFRESH_ERRORS[result?.error] || REFRESH_ERRORS.FAILED;
+    message = result?.ok
+      ? t('refreshDone')
+      : t(REFRESH_ERRORS[result?.error] || 'refreshFailed');
   } catch {
-    message = REFRESH_ERRORS.FAILED;
+    message = t('refreshFailed');
   }
 
   await loadAccount();
@@ -284,11 +291,15 @@ chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === 'ACCOUNT_UPDATED') loadAccount();
 });
 
-// Keep "更新于 …" honest without re-rendering (and re-animating) the card.
+// Keep the "updated …" line honest without re-rendering (and re-animating) the card.
 setInterval(() => {
   const el = app.querySelector('.foot-time');
   const ts = account?.profile?.ts;
-  if (el && ts) el.textContent = `更新于 ${relativeTime(ts)}`;
+  if (el && ts) el.textContent = t('panelUpdated', [relativeTime(ts)]);
 }, 30_000);
+
+// The markup is static, so its accessible label is set here instead.
+const initialLoading = app.querySelector('.loading');
+if (initialLoading) initialLoading.setAttribute('aria-label', t('loading'));
 
 loadAccount();
